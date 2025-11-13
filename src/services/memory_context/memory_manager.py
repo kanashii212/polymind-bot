@@ -2,6 +2,8 @@ import logging
 import asyncio
 from typing import Dict, List, Any, Optional
 import time
+import uuid
+import re
 from dataclasses import dataclass, field
 from sklearn.feature_extraction.text import TfidfVectorizer
 from .user_profile_manager import UserProfileManager
@@ -117,6 +119,57 @@ class MemoryManager:
             "interaction": 0.2,
             "media": 0.1,
         }
+        # Context management settings
+        self.short_term_limit = 12
+        self.context_recent_limit = 18
+        self.max_highlights = 4
+        self.summary_min_messages = 18
+        self.highlight_importance_threshold = 0.7
+        self._priority_keywords = {
+            "remember",
+            "remind",
+            "todo",
+            "task",
+            "deadline",
+            "project",
+            "milestone",
+            "note",
+            "follow up",
+            "follow-up",
+            "summary",
+            "plan",
+            "action",
+            "decision",
+        }
+        self._keyword_stopwords = {
+            "the",
+            "and",
+            "that",
+            "with",
+            "from",
+            "this",
+            "have",
+            "about",
+            "your",
+            "will",
+            "been",
+            "there",
+            "their",
+            "into",
+            "would",
+            "should",
+            "could",
+            "might",
+            "where",
+            "when",
+            "what",
+            "how",
+            "also",
+            "these",
+            "those",
+            "every",
+            "because",
+        }
         if self.db is not None:
             self.persistence_manager.ensure_indexes()
         logger.info("Enhanced MemoryManager initialized with modular components")
@@ -144,6 +197,8 @@ class MemoryManager:
             "group_id": group_id,
             "metadata": metadata,
         }
+        cache_key = group_id if is_group and group_id else conversation_id
+        self._ensure_message_id(cache_key, message, "user")
         async with self.lock:
             if is_group and group_id:
                 if group_id not in self.group_memory_cache:
@@ -191,6 +246,8 @@ class MemoryManager:
             "group_id": group_id,
             "metadata": metadata,
         }
+        cache_key = group_id if is_group and group_id else conversation_id
+        self._ensure_message_id(cache_key, message, "assistant")
         async with self.lock:
             if is_group and group_id:
                 if group_id not in self.group_memory_cache:
@@ -440,6 +497,148 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"Error exporting conversation data: {e}")
             return {}
+
+    def _generate_message_id(self, cache_key: Optional[str], role: str) -> str:
+        """Generate a stable unique message identifier"""
+        key = (cache_key or "conversation").replace(" ", "_")
+        return f"{key}:{role}:{uuid.uuid4().hex}"
+
+    def _ensure_message_id(
+        self, cache_key: Optional[str], message: Dict[str, Any], role: str
+    ) -> str:
+        """Ensure a message dictionary contains a message_id"""
+        if "message_id" not in message or not message.get("message_id"):
+            message["message_id"] = self._generate_message_id(cache_key, role)
+        return message["message_id"]
+
+    def _clone_message_for_context(
+        self, message: Dict[str, Any], extra_metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Create a shallow copy of a message with merged metadata for context usage"""
+        cloned = dict(message)
+        metadata = dict(message.get("metadata", {}))
+        if extra_metadata:
+            metadata.update(extra_metadata)
+        cloned["metadata"] = metadata
+        return cloned
+
+    def _contains_priority_keyword(self, content: str) -> bool:
+        """Check if content contains high-priority keywords"""
+        lowered = content.lower()
+        if any(keyword in lowered for keyword in self._priority_keywords):
+            return True
+        # Simple keyword extraction for verbs/nouns >= 4 chars
+        tokens = re.findall(r"[a-zA-Z]{4,}", lowered)
+        for token in tokens:
+            if token in self._keyword_stopwords:
+                continue
+            if token.endswith("ing") or token.endswith("ed"):
+                return True
+        return False
+
+    def _select_highlights(
+        self,
+        cache_key: Optional[str],
+        message_cache: List[Dict[str, Any]],
+        is_group: bool,
+    ) -> List[Dict[str, Any]]:
+        """Select high-importance messages to surface as highlights"""
+        if not message_cache:
+            return []
+        candidates: List[Dict[str, Any]] = []
+        total_messages = len(message_cache)
+        for idx, raw_message in enumerate(message_cache):
+            content = raw_message.get("content", "").strip()
+            if not content:
+                continue
+            importance = float(raw_message.get("importance", 0.5))
+            keyword_bonus = 0.1 if self._contains_priority_keyword(content) else 0.0
+            role_bonus = 0.05 if raw_message.get("role") == "user" else 0.0
+            recency_penalty = 0.05 if idx >= max(0, total_messages - self.short_term_limit) else 0.0
+            score = importance + keyword_bonus + role_bonus - recency_penalty
+            if score >= self.highlight_importance_threshold or keyword_bonus > 0:
+                message_id = self._ensure_message_id(cache_key, raw_message, raw_message.get("role", "assistant"))
+                cloned = self._clone_message_for_context(
+                    raw_message,
+                    {
+                        "context_type": "highlight",
+                        "highlight_score": round(score, 3),
+                        "message_id": message_id,
+                        "original_index": idx,
+                    },
+                )
+                candidates.append(cloned)
+        if not candidates:
+            return []
+        # Sort by score and timestamp to keep most relevant highlights
+        candidates.sort(
+            key=lambda msg: (
+                msg["metadata"].get("highlight_score", 0.0),
+                msg.get("timestamp", 0.0),
+            ),
+            reverse=True,
+        )
+        selected = []
+        seen_ids = set()
+        for message in candidates:
+            msg_id = message["metadata"].get("message_id")
+            if msg_id in seen_ids:
+                continue
+            seen_ids.add(msg_id)
+            selected.append(message)
+            if len(selected) >= self.max_highlights:
+                break
+        selected.sort(key=lambda msg: msg.get("timestamp", 0.0))
+        return selected
+
+    async def build_context_bundle(
+        self,
+        cache_key: str,
+        limit: int = 12,
+        include_summary: bool = True,
+        include_highlights: bool = True,
+        is_group: bool = False,
+    ) -> Dict[str, Any]:
+        """Build a context bundle combining summary, highlights, and recent messages"""
+        key = cache_key
+        if is_group and cache_key is None:
+            key = "group"
+        await self.load_memory(key, is_group)
+        message_cache = (
+            self.group_memory_cache.get(key, [])
+            if is_group
+            else self.memory_cache.get(key, [])
+        )
+        if not message_cache:
+            return {"recent": [], "highlights": [], "summary": None}
+        for raw_message in message_cache:
+            self._ensure_message_id(key, raw_message, raw_message.get("role", "assistant"))
+        recent_limit = max(limit, self.short_term_limit)
+        recent_slice = message_cache[-recent_limit:]
+        recent_messages = [
+            self._clone_message_for_context(
+                msg,
+                {
+                    "context_type": "recent",
+                    "message_id": msg.get("message_id"),
+                },
+            )
+            for msg in recent_slice
+            if msg.get("content")
+        ]
+        highlights: List[Dict[str, Any]] = []
+        if include_highlights:
+            highlights = self._select_highlights(key, message_cache, is_group)
+        summary: Optional[str] = None
+        if include_summary:
+            if len(message_cache) >= self.summary_min_messages:
+                summary = await self._generate_conversation_summary(key, is_group)
+            else:
+                summary_cache = (
+                    self.group_summaries if is_group else self.conversation_summaries
+                )
+                summary = summary_cache.get(key)
+        return {"recent": recent_messages, "highlights": highlights, "summary": summary}
 
     def _get_memory_data(self, cache_key: str, is_group: bool) -> Dict[str, Any]:
         """Get memory data for persistence"""

@@ -49,6 +49,7 @@ class GeminiAPI:
             top_k=40,
             max_output_tokens=32768,
         )
+        self.context_recent_limit = 18
         self.logger.info(
             "Gemini 2.5 Flash API initialized with Google Gen AI SDK and MCP support"
         )
@@ -872,25 +873,54 @@ Focus on providing the most helpful and accurate response possible using the ava
             self.logger.info(
                 f"🔧 Building conversation context with {len(context)} messages"
             )
-            for i, msg in enumerate(context[-10:]):
+            summary_messages: List[Dict[str, Any]] = []
+            highlight_messages: List[Dict[str, Any]] = []
+            recent_messages: List[Dict[str, Any]] = []
+            for msg in context:
+                if not isinstance(msg, dict):
+                    continue
+                metadata = msg.get("metadata", {}) or {}
+                context_type = metadata.get("context_type")
+                if context_type == "summary":
+                    summary_messages.append(msg)
+                elif context_type == "highlight":
+                    highlight_messages.append(msg)
+                else:
+                    recent_messages.append(msg)
+
+            recent_tail = (
+                recent_messages[-self.context_recent_limit :]
+                if recent_messages
+                else []
+            )
+            ordered_messages = summary_messages + highlight_messages + recent_tail
+            seen_message_ids = set()
+            seen_pairs = set()
+            for i, msg in enumerate(ordered_messages):
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
+                metadata = msg.get("metadata", {}) or {}
+                message_id = metadata.get("message_id")
+                if not content:
+                    continue
+                dedup_key = (role, content.strip())
+                if message_id:
+                    if message_id in seen_message_ids:
+                        continue
+                    seen_message_ids.add(message_id)
+                elif dedup_key in seen_pairs:
+                    continue
+                seen_pairs.add(dedup_key)
+                gemini_role = "user" if role == "user" else "model"
                 self.logger.debug(
-                    f"Context message {i}: role={role}, content_length={len(content)}"
+                    f"Context message {i}: role={role}, context_type={metadata.get('context_type')}, length={len(content)}"
                 )
-                if content:
-                    if role == "user":
-                        contents.append(
-                            types.Content(
-                                role="user", parts=[types.Part.from_text(text=content)]
-                            )
-                        )
-                    elif role == "assistant" or role == "model":
-                        contents.append(
-                            types.Content(
-                                role="model", parts=[types.Part.from_text(text=content)]
-                            )
-                        )
+                contents.append(
+                    types.Content(
+                        role=gemini_role,
+                        parts=[types.Part.from_text(text=content)],
+                    )
+                )
         else:
             self.logger.warning("🔧 No conversation context provided to Gemini")
         if content_parts:

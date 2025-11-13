@@ -104,21 +104,82 @@ class ModelHistoryManager:
             f"Getting history for conversation_id: {conversation_id} (model: {model_id})"
         )
         try:
-            messages = await self.memory_manager.get_short_term_memory(
-                conversation_id, limit=max_messages
+            bundle = await self.memory_manager.build_context_bundle(
+                conversation_id,
+                limit=max_messages,
+                include_summary=True,
+                include_highlights=True,
+                is_group=False,
             )
-            formatted_history = []
-            for msg in messages:
-                sender = msg.get("sender", "")
-                content = msg.get("content", "")
+            formatted_history: List[Dict[str, Any]] = []
+
+            summary_text = bundle.get("summary")
+            if summary_text:
+                formatted_history.append(
+                    {
+                        "role": "assistant",
+                        "content": f"[Context summary]\n{summary_text}",
+                        "metadata": {
+                            "context_type": "summary",
+                            "source": "memory_manager",
+                            "message_id": f"{conversation_id}:summary",
+                        },
+                    }
+                )
+
+            combined_entries: List[Dict[str, Any]] = []
+            combined_entries.extend(bundle.get("highlights", []))
+            combined_entries.extend(bundle.get("recent", []))
+            if combined_entries:
+                combined_entries.sort(key=lambda msg: msg.get("timestamp", 0.0))
+            seen_ids = set()
+            highlights: List[Dict[str, Any]] = []
+            recent_entries: List[Dict[str, Any]] = []
+            for message in combined_entries:
+                metadata = message.get("metadata", {})
+                message_id = metadata.get("message_id")
+                if message_id and message_id in seen_ids:
+                    continue
+                if message_id:
+                    seen_ids.add(message_id)
+                context_type = metadata.get("context_type")
+                if context_type == "highlight":
+                    highlights.append(message)
+                else:
+                    recent_entries.append(message)
+
+            if len(highlights) > max_messages:
+                highlights = highlights[-max_messages:]
+                recent_entries = []
+
+            remaining_slots = max(max_messages - len(highlights), 0)
+            selected_recent = (
+                recent_entries[-remaining_slots:]
+                if remaining_slots and recent_entries
+                else []
+            )
+
+            context_messages = sorted(
+                highlights + selected_recent,
+                key=lambda msg: msg.get("timestamp", 0.0),
+            )
+
+            for message in context_messages:
+                content = message.get("content", "")
                 if not content or not content.strip():
                     continue
-                role = (
-                    "user"
-                    if sender == str(user_id) or sender == "user"
-                    else "assistant"
+                raw_role = message.get("role", "assistant")
+                role = "user" if raw_role == "user" else "assistant"
+                metadata = dict(message.get("metadata", {}))
+                metadata.setdefault("message_id", metadata.get("message_id"))
+                metadata.setdefault(
+                    "source", metadata.get("context_type", "recent")
                 )
-                formatted_history.append({"role": role, "content": content})
+                metadata["timestamp"] = message.get("timestamp")
+                formatted_history.append(
+                    {"role": role, "content": content, "metadata": metadata}
+                )
+
             logger.info(
                 f"Retrieved {len(formatted_history)} history messages for user {user_id} with model {model_id}"
             )
