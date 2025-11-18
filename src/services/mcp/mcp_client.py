@@ -108,9 +108,9 @@ class MCPToolConverter:
             )
 
         # Add additional metadata for robustness
-        openai_tool["function"]["strict"] = (
-            True  # Enable strict mode for better validation
-        )
+        openai_tool["function"][
+            "strict"
+        ] = True  # Enable strict mode for better validation
 
         return openai_tool
 

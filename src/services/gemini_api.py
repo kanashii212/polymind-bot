@@ -889,9 +889,7 @@ Focus on providing the most helpful and accurate response possible using the ava
                     recent_messages.append(msg)
 
             recent_tail = (
-                recent_messages[-self.context_recent_limit :]
-                if recent_messages
-                else []
+                recent_messages[-self.context_recent_limit :] if recent_messages else []
             )
             ordered_messages = summary_messages + highlight_messages + recent_tail
             seen_message_ids = set()

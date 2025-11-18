@@ -51,9 +51,9 @@ class DeepSeekLLM:
             "Provide your answer directly without showing your reasoning process."
         )
         if system_message_idx >= 0:
-            modified_messages[system_message_idx]["content"] += (
-                f"\n\n{anti_thinking_instruction}"
-            )
+            modified_messages[system_message_idx][
+                "content"
+            ] += f"\n\n{anti_thinking_instruction}"
         else:
             modified_messages.insert(
                 0, {"role": "system", "content": anti_thinking_instruction}

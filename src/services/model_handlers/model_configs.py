@@ -496,12 +496,16 @@ class ModelConfigurations:
             "supports_system_messages": ModelConfigurations._model_supports_system_messages(
                 model_id, model
             ),
-            "supports_temperature": "temperature" in model.supported_parameters
-            if model.supported_parameters
-            else True,
-            "supports_max_tokens": "max_tokens" in model.supported_parameters
-            if model.supported_parameters
-            else True,
+            "supports_temperature": (
+                "temperature" in model.supported_parameters
+                if model.supported_parameters
+                else True
+            ),
+            "supports_max_tokens": (
+                "max_tokens" in model.supported_parameters
+                if model.supported_parameters
+                else True
+            ),
             "provider": model.provider.value,
             "model_type": model.type,
             "fallback_model": ModelConfigurations._get_fallback_model(model_id, model),

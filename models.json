@@ -1,5 +1,31 @@
 [
   {
+    "name": "Sherlock Dash Alpha",
+    "id": "openrouter/sherlock-dash-alpha",
+    "description": "This is a cloaked model provided to the community to gather feedback. A frontier non-reasoning model that excels at tool calling, with a 1.8M context window and multimodal support.\n\n**Note:** All prompts and completions for this model are logged by the provider and may be used to improve the model.",
+    "supported_parameters": [
+      "max_tokens",
+      "response_format",
+      "structured_outputs",
+      "tool_choice",
+      "tools"
+    ]
+  },
+  {
+    "name": "Sherlock Think Alpha",
+    "id": "openrouter/sherlock-think-alpha",
+    "description": "This is a cloaked model provided to the community to gather feedback. A frontier reasoning model that excels at tool calling, with a 1.8M context window and multimodal support.\n\n**Note:** All prompts and completions for this model are logged by the provider and may be used to improve the model.",
+    "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "response_format",
+      "structured_outputs",
+      "tool_choice",
+      "tools"
+    ]
+  },
+  {
     "name": "Kwaipilot: KAT-Coder-Pro V1 (free)",
     "id": "kwaipilot/kat-coder-pro:free",
     "description": "KAT-Coder-Pro V1 is KwaiKAT's most advanced agentic coding model in the KAT-Coder series. Designed specifically for agentic coding tasks, it excels in real-world software engineering scenarios, achieving 73.4% solve rate on the SWE-Bench Verified benchmark. \n\nThe model has been optimized for tool-use capability, multi-turn interaction, instruction following, generalization, and comprehensive capabilities through a multi-stage training process, including mid-training, supervised fine-tuning (SFT), reinforcement fine-tuning (RFT), and scalable agentic RL.",
@@ -17,18 +43,6 @@
       "tools",
       "top_k",
       "top_p"
-    ]
-  },
-  {
-    "name": "Polaris Alpha",
-    "id": "openrouter/polaris-alpha",
-    "description": "This is a cloaked model provided to the community to gather feedback. A powerful, general-purpose model that excels across real-world tasks, with standout performance in coding, tool calling, and instruction following.\n\n**Note:** All prompts and completions for this model are logged by the provider and may be used to improve the model.",
-    "supported_parameters": [
-      "max_tokens",
-      "response_format",
-      "structured_outputs",
-      "tool_choice",
-      "tools"
     ]
   },
   {
@@ -303,22 +317,6 @@
     ]
   },
   {
-    "name": "Meta: Llama 3.3 8B Instruct (free)",
-    "id": "meta-llama/llama-3.3-8b-instruct:free",
-    "description": "A lightweight and ultra-fast variant of Llama 3.3 70B, for use when quick response times are needed most.",
-    "supported_parameters": [
-      "max_tokens",
-      "repetition_penalty",
-      "response_format",
-      "structured_outputs",
-      "temperature",
-      "tool_choice",
-      "tools",
-      "top_k",
-      "top_p"
-    ]
-  },
-  {
     "name": "Qwen: Qwen3 4B (free)",
     "id": "qwen/qwen3-4b:free",
     "description": "Qwen3-4B is a 4 billion parameter dense language model from the Qwen3 series, designed to support both general-purpose and reasoning-intensive tasks. It introduces a dual-mode architecture—thinking and non-thinking—allowing dynamic switching between high-precision logical reasoning and efficient dialogue generation. This makes it well-suited for multi-turn chat, instruction following, and complex agent workflows.",
@@ -446,56 +444,6 @@
       "seed",
       "stop",
       "temperature",
-      "top_k",
-      "top_p"
-    ]
-  },
-  {
-    "name": "Agentica: Deepcoder 14B Preview (free)",
-    "id": "agentica-org/deepcoder-14b-preview:free",
-    "description": "DeepCoder-14B-Preview is a 14B parameter code generation model fine-tuned from DeepSeek-R1-Distill-Qwen-14B using reinforcement learning with GRPO+ and iterative context lengthening. It is optimized for long-context program synthesis and achieves strong performance across coding benchmarks, including 60.6% on LiveCodeBench v5, competitive with models like o3-Mini",
-    "supported_parameters": [
-      "frequency_penalty",
-      "include_reasoning",
-      "max_tokens",
-      "presence_penalty",
-      "reasoning",
-      "repetition_penalty",
-      "seed",
-      "stop",
-      "temperature",
-      "top_k",
-      "top_p"
-    ]
-  },
-  {
-    "name": "Meta: Llama 4 Maverick (free)",
-    "id": "meta-llama/llama-4-maverick:free",
-    "description": "Llama 4 Maverick 17B Instruct (128E) is a high-capacity multimodal language model from Meta, built on a mixture-of-experts (MoE) architecture with 128 experts and 17 billion active parameters per forward pass (400B total). It supports multilingual text and image input, and produces multilingual text and code output across 12 supported languages. Optimized for vision-language tasks, Maverick is instruction-tuned for assistant-like behavior, image reasoning, and general-purpose multimodal interaction.\n\nMaverick features early fusion for native multimodality and a 1 million token context window. It was trained on a curated mixture of public, licensed, and Meta-platform data, covering ~22 trillion tokens, with a knowledge cutoff in August 2024. Released on April 5, 2025 under the Llama 4 Community License, Maverick is suited for research and commercial applications requiring advanced multimodal understanding and high model throughput.",
-    "supported_parameters": [
-      "max_tokens",
-      "repetition_penalty",
-      "response_format",
-      "structured_outputs",
-      "temperature",
-      "tool_choice",
-      "tools",
-      "top_k",
-      "top_p"
-    ]
-  },
-  {
-    "name": "Meta: Llama 4 Scout (free)",
-    "id": "meta-llama/llama-4-scout:free",
-    "description": "Llama 4 Scout 17B Instruct (16E) is a mixture-of-experts (MoE) language model developed by Meta, activating 17 billion parameters out of a total of 109B. It supports native multimodal input (text and image) and multilingual output (text and code) across 12 supported languages. Designed for assistant-style interaction and visual reasoning, Scout uses 16 experts per forward pass and features a context length of 10 million tokens, with a training corpus of ~40 trillion tokens.\n\nBuilt for high efficiency and local or commercial deployment, Llama 4 Scout incorporates early fusion for seamless modality integration. It is instruction-tuned for use in multilingual chat, captioning, and image understanding tasks. Released under the Llama 4 Community License, it was last trained on data up to August 2024 and launched publicly on April 5, 2025.",
-    "supported_parameters": [
-      "max_tokens",
-      "repetition_penalty",
-      "response_format",
-      "structured_outputs",
-      "temperature",
-      "tool_choice",
-      "tools",
       "top_k",
       "top_p"
     ]

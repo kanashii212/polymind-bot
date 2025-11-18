@@ -60,9 +60,9 @@ class GroupUIManager:
                     f"{self.EMOJIS['topic']} Topics: {topics}"
                 )
             if self._should_show_management_buttons(update, metadata):
-                enhancements[
-                    "inline_keyboard"
-                ] = await self._create_quick_actions_keyboard(metadata.get("group_id"))
+                enhancements["inline_keyboard"] = (
+                    await self._create_quick_actions_keyboard(metadata.get("group_id"))
+                )
             return enhancements
         except Exception as e:
             self.logger.error(f"Error enhancing group response: {e}")

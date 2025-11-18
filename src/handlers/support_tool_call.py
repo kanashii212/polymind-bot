@@ -159,7 +159,9 @@ class ToolCallSupportDetector:
                 display_name = getattr(config, "display_name", model_id)
                 model_line = f"   • {emoji} {display_name}"
                 if hasattr(config, "openrouter_key") and config.openrouter_key:
-                    model_line += f" (`{config.openrouter_key}`)"
+                    from src.utils.security import mask_key
+
+                    model_line += f" (`{mask_key(config.openrouter_key)}`)"
                 report_lines.append(model_line)
         report_lines.extend(
             [
@@ -188,24 +190,27 @@ def main():
     detector = ToolCallSupportDetector()
     if args.stats:
         stats = detector.get_tool_call_statistics()
-        print(
-            f"Tool-call models: {stats['tool_call_models']}/{stats['total_models']} ({stats['percentage']}%)"
+        logger.info(
+            "Tool-call models: %s/%s (%s%%)",
+            stats["tool_call_models"],
+            stats["total_models"],
+            stats["percentage"],
         )
     elif args.category:
         categories = detector.get_tool_call_models_by_category()
         if args.category in categories:
             category_info = categories[args.category]
-            print(f"{category_info['emoji']} {category_info['name']}:")
+            logger.info("%s %s", category_info["emoji"], category_info["name"])
             for model_id, config in category_info["models"].items():
                 emoji = getattr(
                     config, "emoji", getattr(config, "indicator_emoji", "🤖")
                 )
                 display_name = getattr(config, "display_name", model_id)
-                print(f"  • {emoji} {display_name}")
+                logger.info("  • %s %s", emoji, display_name)
         else:
-            print(f"Category '{args.category}' not found")
+            logger.warning("Category '%s' not found", args.category)
     else:
-        print(detector.print_tool_call_models_report())
+        logger.info(detector.print_tool_call_models_report())
 
 
 if __name__ == "__main__":

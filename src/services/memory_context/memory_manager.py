@@ -554,10 +554,14 @@ class MemoryManager:
             importance = float(raw_message.get("importance", 0.5))
             keyword_bonus = 0.1 if self._contains_priority_keyword(content) else 0.0
             role_bonus = 0.05 if raw_message.get("role") == "user" else 0.0
-            recency_penalty = 0.05 if idx >= max(0, total_messages - self.short_term_limit) else 0.0
+            recency_penalty = (
+                0.05 if idx >= max(0, total_messages - self.short_term_limit) else 0.0
+            )
             score = importance + keyword_bonus + role_bonus - recency_penalty
             if score >= self.highlight_importance_threshold or keyword_bonus > 0:
-                message_id = self._ensure_message_id(cache_key, raw_message, raw_message.get("role", "assistant"))
+                message_id = self._ensure_message_id(
+                    cache_key, raw_message, raw_message.get("role", "assistant")
+                )
                 cloned = self._clone_message_for_context(
                     raw_message,
                     {
@@ -612,7 +616,9 @@ class MemoryManager:
         if not message_cache:
             return {"recent": [], "highlights": [], "summary": None}
         for raw_message in message_cache:
-            self._ensure_message_id(key, raw_message, raw_message.get("role", "assistant"))
+            self._ensure_message_id(
+                key, raw_message, raw_message.get("role", "assistant")
+            )
         recent_limit = max(limit, self.short_term_limit)
         recent_slice = message_cache[-recent_limit:]
         recent_messages = [

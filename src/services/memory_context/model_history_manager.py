@@ -172,9 +172,7 @@ class ModelHistoryManager:
                 role = "user" if raw_role == "user" else "assistant"
                 metadata = dict(message.get("metadata", {}))
                 metadata.setdefault("message_id", metadata.get("message_id"))
-                metadata.setdefault(
-                    "source", metadata.get("context_type", "recent")
-                )
+                metadata.setdefault("source", metadata.get("context_type", "recent"))
                 metadata["timestamp"] = message.get("timestamp")
                 formatted_history.append(
                     {"role": role, "content": content, "metadata": metadata}

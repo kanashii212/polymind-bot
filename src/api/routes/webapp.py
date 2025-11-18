@@ -285,16 +285,14 @@ async def verify_telegram_init_data(
                     )
             except HTTPException:
                 raise
-            except Exception as e2:
-                logger.error(f"[Auth] Tolerant parse error: {e2}", exc_info=True)
+            except Exception:
+                logger.error("[Auth] Tolerant parse error", exc_info=True)
                 raise HTTPException(
-                    status_code=401, detail=f"Init data validation failed: {str(e2)}"
+                    status_code=401, detail="Init data validation failed"
                 )
-        except Exception as e:
-            logger.error(f"[Auth] Init data validation error: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=401, detail=f"Init data validation failed: {str(e)}"
-            )
+        except Exception:
+            logger.error("[Auth] Init data validation error", exc_info=True)
+            raise HTTPException(status_code=401, detail="Init data validation failed")
 
     # Fallback authentication: URL parameter user_id (for "Open" button outside Telegram context)
     if user_id:
@@ -484,7 +482,10 @@ async def build_session_id_mapping(current_user: UserInfo):
 
 
 async def get_old_format_sessions(
-    current_user: UserInfo, include_messages: bool = False
+    current_user: UserInfo,
+    include_messages: bool = False,
+    limit: int = 50,
+    offset: int = 0,
 ) -> List[ChatSession]:
     """
     Get chat sessions from the old cache_key format memory system.
@@ -506,10 +507,35 @@ async def get_old_format_sessions(
         # Query the conversations collection for documents where cache_key starts with user_{user_id}_model_
         conversations_collection = persistence_manager.db["conversations"]
 
-        # Find all documents matching the pattern
-        session_docs = list(
-            conversations_collection.find({"cache_key": {"$regex": f"^{user_prefix}"}})
-        )
+        # Use projection to minimize transferred data and support pagination.
+        # When include_messages is False we can request only the metadata and compute
+        # message_count server-side using aggregation, avoiding loading large message arrays.
+        if include_messages:
+            session_docs = list(
+                conversations_collection.find(
+                    {"cache_key": {"$regex": f"^{user_prefix}"}},
+                    {"cache_key": 1, "messages": 1, "last_updated": 1, "title": 1},
+                )
+                .skip(offset)
+                .limit(limit)
+            )
+        else:
+            # Use aggregation to only fetch cache_key, last_updated, and the computed message_count
+            pipeline = [
+                {"$match": {"cache_key": {"$regex": f"^{user_prefix}"}}},
+                {
+                    "$project": {
+                        "cache_key": 1,
+                        "last_updated": 1,
+                        "title": 1,
+                        "message_count": {"$size": {"$ifNull": ["$messages", []]}},
+                    }
+                },
+                {"$skip": offset},
+                {"$limit": limit},
+            ]
+
+            session_docs = list(conversations_collection.aggregate(pipeline))
 
         logger.info(
             f"[Old Sessions] Found {len(session_docs)} old format conversations for user {user_id}"
@@ -519,7 +545,8 @@ async def get_old_format_sessions(
         for doc in session_docs:
             cache_key = doc.get("cache_key", "")
             messages = doc.get("messages", [])
-            message_count = len(messages)
+            # If aggregation returned message_count use it, otherwise fallback to list length
+            message_count = doc.get("message_count", len(messages))
             last_updated = doc.get("last_updated", 0)
 
             # Skip if no messages
@@ -737,6 +764,8 @@ async def create_chat_session(
 async def get_chat_sessions(
     current_user: UserInfo = Depends(get_current_user),
     include_messages: bool = Query(False, description="Include full message arrays"),
+    limit: int = Query(50, description="Maximum number of sessions to return"),
+    offset: int = Query(0, description="Sessions to skip"),
 ):
     """
     Get user's chat sessions with UUID-based schema.
@@ -750,8 +779,45 @@ async def get_chat_sessions(
     try:
         logger.info(f"[Sessions] Querying unified sessions for user_id={user_id}")
 
-        # Simple query: just find sessions for this user
-        session_docs = list(sessions_collection.find({"user_id": user_id}))
+        # Simple query: just find sessions for this user.
+        # Add pagination to avoid transferring huge result sets to the frontend
+        if include_messages:
+            session_docs = list(
+                sessions_collection.find(
+                    {"user_id": user_id},
+                    {
+                        "session_id": 1,
+                        "title": 1,
+                        "model": 1,
+                        "created_at": 1,
+                        "updated_at": 1,
+                        "messages": 1,
+                        "pinned": 1,
+                        "pinned_at": 1,
+                    },
+                )
+                .skip(offset)
+                .limit(limit)
+            )
+        else:
+            pipeline = [
+                {"$match": {"user_id": user_id}},
+                {
+                    "$project": {
+                        "session_id": 1,
+                        "title": 1,
+                        "model": 1,
+                        "created_at": 1,
+                        "updated_at": 1,
+                        "pinned": 1,
+                        "pinned_at": 1,
+                        "message_count": {"$size": {"$ifNull": ["$messages", []]}},
+                    }
+                },
+                {"$skip": offset},
+                {"$limit": limit},
+            ]
+            session_docs = list(sessions_collection.aggregate(pipeline))
 
         logger.info(
             f"[Sessions] Found {len(session_docs)} unified sessions for user {user_id}"
@@ -759,8 +825,15 @@ async def get_chat_sessions(
 
         sessions = []
         for doc in session_docs:
-            messages_data = doc.get("messages", [])
-            message_count = len([m for m in messages_data if m.get("role") == "user"])
+            # When include_messages=False the aggregation returns message_count
+            if include_messages:
+                messages_data = doc.get("messages", [])
+                message_count = len(
+                    [m for m in messages_data if m.get("role") == "user"]
+                )
+            else:
+                messages_data = []
+                message_count = int(doc.get("message_count", 0))
 
             # Convert messages to Pydantic models if requested
             messages = []
@@ -795,6 +868,15 @@ async def get_chat_sessions(
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
 
         logger.info(f"[Sessions] Returning {len(sessions)} unified sessions")
+        # If we didn't return enough sessions from the new schema, include old sessions
+        if len(sessions) < limit:
+            remaining = limit - len(sessions)
+            old_sessions = await get_old_format_sessions(
+                current_user, include_messages, limit=remaining, offset=offset
+            )
+            sessions.extend(old_sessions)
+            sessions.sort(key=lambda s: s.updated_at, reverse=True)
+
         return sessions
 
     except Exception as e:
@@ -810,16 +892,22 @@ async def get_chat_sessions(
 async def get_chat_sessions_legacy(
     current_user: UserInfo = Depends(get_current_user),
     include_messages: bool = Query(False, description="Include full message arrays"),
+    limit: int = Query(50, description="Max number of sessions to return"),
+    offset: int = Query(0, description="Number of sessions to skip"),
 ):
     """
     Legacy endpoint for fetching chat sessions.
     Returns sessions from both new unified schema and old cache_key format.
     """
     # Get sessions from new unified schema
-    new_sessions = await get_chat_sessions(current_user, include_messages)
+    new_sessions = await get_chat_sessions(
+        current_user, include_messages, limit=limit, offset=offset
+    )
 
     # Also get sessions from old memory system
-    old_sessions = await get_old_format_sessions(current_user, include_messages)
+    old_sessions = await get_old_format_sessions(
+        current_user, include_messages, limit=limit, offset=offset
+    )
 
     # Combine and sort by updated_at (most recent first)
     all_sessions = new_sessions + old_sessions
@@ -1281,7 +1369,7 @@ async def list_chats_legacy(
     Returns sessions in chat-compatible format.
     """
     # Get sessions using v2 endpoint
-    sessions = await get_chat_sessions(current_user, False)
+    sessions = await get_chat_sessions(current_user, False, limit=limit, offset=offset)
 
     # Convert to chat format and apply pagination
     chats = []

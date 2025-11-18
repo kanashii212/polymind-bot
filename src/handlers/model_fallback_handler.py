@@ -23,13 +23,31 @@ class ModelFallbackHandler:
     def __init__(self, response_formatter):
         self.logger = logging.getLogger(__name__)
         self.response_formatter = response_formatter
-        # Simplified fallback map - uses qwen/qwen3-8b:free as primary fallback
+        # Comprehensive fallback map with provider diversity to handle infrastructure issues
         self.fallback_map = {
             "gemini": [
-                "qwen/qwen3-8b:free",
+                "deepseek/deepseek-chat-v3.1:free",
+                "qwen/qwen3-14b:free",
             ],
             "deepseek": [
-                "qwen/qwen3-8b:free",
+                "gemini",
+                "qwen/qwen3-14b:free",
+            ],
+            # OpenRouter model fallbacks - switch to different providers first
+            "qwen/qwen3-14b:free": [
+                "gemini",  # Reliable Google provider
+                "deepseek/deepseek-chat-v3.1:free",  # Reliable DeepSeek provider
+                "meta-llama/llama-3.3-70b-instruct:free",  # Different OpenRouter provider
+            ],
+            "qwen/qwen3-235b-a22b:free": [
+                "gemini",
+                "deepseek/deepseek-chat-v3.1:free",
+                "qwen/qwen3-14b:free",
+            ],
+            "meta-llama/llama-3.3-70b-instruct:free": [
+                "gemini",
+                "deepseek/deepseek-chat-v3.1:free",
+                "qwen/qwen3-14b:free",
             ],
         }
 
@@ -42,12 +60,15 @@ class ModelFallbackHandler:
         Returns:
             List of fallback model names in order of preference
         """
-        return self.fallback_map.get(
-            primary_model,
-            [
-                "qwen/qwen3-8b:free",  # Default fallback for any model
-            ],
-        )
+        # Default fallbacks prioritize provider diversity
+        default_fallbacks = [
+            "gemini",  # Reliable Google provider
+            "deepseek/deepseek-chat-v3.1:free",  # Reliable DeepSeek provider
+            "meta-llama/llama-3.3-70b-instruct:free",  # Meta models on OpenRouter
+            "qwen/qwen3-14b:free",  # Qwen models on OpenRouter
+        ]
+
+        return self.fallback_map.get(primary_model, default_fallbacks)
 
     async def attempt_with_fallback(
         self,
@@ -151,7 +172,15 @@ class ModelFallbackHandler:
                 continue
             except Exception as e:
                 last_error = e
-                self.logger.warning(f"Error with model {model_name}: {str(e)}")
+                error_msg = str(e)
+
+                # Log more specific error information for provider issues
+                if self._is_provider_error(error_msg):
+                    self.logger.warning(
+                        f"Provider infrastructure issue with {model_name}: {error_msg}"
+                    )
+                else:
+                    self.logger.warning(f"Error with model {model_name}: {error_msg}")
                 continue
         raise Exception(f"All fallback models failed. Last error: {str(last_error)}")
 
@@ -256,10 +285,21 @@ class ModelFallbackHandler:
             fallback_model: The fallback model being used
         """
         try:
-            notification_text = (
-                f"⚠️ *{primary_model}* is temporarily unavailable. "
-                f"Using *{fallback_model}* instead."
-            )
+            # Check if it's a provider infrastructure issue
+            if any(
+                provider in primary_model
+                for provider in ["qwen/", "meta-llama/", "mistralai/"]
+            ):
+                notification_text = (
+                    f"🔄 *{primary_model}* provider is experiencing technical issues. "
+                    f"Switching to *{fallback_model}* for reliable service."
+                )
+            else:
+                notification_text = (
+                    f"⚠️ *{primary_model}* is temporarily unavailable. "
+                    f"Using *{fallback_model}* instead."
+                )
+
             notification_msg = await self.response_formatter.safe_send_message(
                 message, notification_text
             )
@@ -271,6 +311,28 @@ class ModelFallbackHandler:
                     pass
         except Exception as e:
             self.logger.debug(f"Failed to send fallback notification: {e}")
+
+    def _is_provider_error(self, error_message: str) -> bool:
+        """
+        Check if the error is likely a provider infrastructure issue.
+        Args:
+            error_message: The error message to analyze
+        Returns:
+            True if it's likely a provider issue, False otherwise
+        """
+        provider_error_indicators = [
+            "502 bad gateway",
+            "503 service unavailable",
+            "provider returned error",
+            "upstream connect error",
+            "timeout",
+            "connection",
+            "gateway",
+            "server error",
+        ]
+
+        error_lower = error_message.lower()
+        return any(indicator in error_lower for indicator in provider_error_indicators)
 
     def add_custom_fallback_mapping(self, model: str, fallback_list: List[str]):
         """

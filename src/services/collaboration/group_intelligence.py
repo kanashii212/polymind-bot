@@ -441,9 +441,9 @@ class GroupIntelligenceSystem:
                     group_id
                 ),
             }
-            insights[
-                "recommendations"
-            ] = await self._generate_collaboration_recommendations(group_id, insights)
+            insights["recommendations"] = (
+                await self._generate_collaboration_recommendations(group_id, insights)
+            )
             return insights
         except Exception as e:
             self.logger.error(

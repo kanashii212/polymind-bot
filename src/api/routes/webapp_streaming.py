@@ -330,9 +330,9 @@ async def generate_ai_response_stream(
                         "content": message,
                         "createdAt": now.isoformat(),
                         "model": model_name,
-                        "attachments": [att.dict() for att in attachments]
-                        if attachments
-                        else None,
+                        "attachments": (
+                            [att.dict() for att in attachments] if attachments else None
+                        ),
                     }
                     assistant_msg = {
                         "id": f"{chat_id}_{int(now.timestamp() * 1000) + 1}",
@@ -577,12 +577,16 @@ async def list_chat_sessions(
                     "id": session_doc["session_id"],
                     "title": session_doc.get("title", "New Chat"),
                     "model": session_doc.get("model", "gemini/gemini-2.0-flash-exp"),
-                    "created_at": session_doc["created_at"].timestamp()
-                    if isinstance(session_doc["created_at"], datetime)
-                    else session_doc["created_at"],
-                    "updated_at": session_doc["updated_at"].timestamp()
-                    if isinstance(session_doc["updated_at"], datetime)
-                    else session_doc["updated_at"],
+                    "created_at": (
+                        session_doc["created_at"].timestamp()
+                        if isinstance(session_doc["created_at"], datetime)
+                        else session_doc["created_at"]
+                    ),
+                    "updated_at": (
+                        session_doc["updated_at"].timestamp()
+                        if isinstance(session_doc["updated_at"], datetime)
+                        else session_doc["updated_at"]
+                    ),
                     "message_count": session_doc.get("message_count", 0),
                 }
             )
