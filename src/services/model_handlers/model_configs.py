@@ -28,7 +28,7 @@ class ModelConfig:
     system_message: Optional[str] = None
     indicator_emoji: str = "🤖"
     openrouter_model_key: Optional[str] = None
-    max_tokens: int = 32000
+    max_tokens: int = 48000
     default_temperature: float = 0.7
     supports_images: bool = False
     supports_audio: bool = False
@@ -38,6 +38,7 @@ class ModelConfig:
     type: str = "general_purpose"
     capabilities: List[str] = field(default_factory=list)
     supported_parameters: List[str] = field(default_factory=list)
+    has_streaming_tool_conflict: bool = False
 
 
 class ModelConfigurations:
@@ -77,7 +78,7 @@ class ModelConfigurations:
                                             capabilities
                                         )
                                     )
-                                    max_tokens = 32000
+                                    max_tokens = 48000
                                     description = model_data.get(
                                         "description", ""
                                     ).lower()
@@ -86,9 +87,12 @@ class ModelConfigurations:
                                         or "thinking" in description
                                     ):
                                         max_tokens = 65536
-                                    elif (
-                                        "code" in description
-                                        or "programming" in description
+                                    elif any(
+                                        keyword in description
+                                        for keyword in [
+                                            "code", "coding", "programming", "software engineering", 
+                                            "agentic coding", "coder", "development", "swe-bench"
+                                        ]
                                     ):
                                         max_tokens = 49152
                                     elif any(
@@ -106,6 +110,10 @@ class ModelConfigurations:
                                         or "multimodal" in description
                                     ):
                                         max_tokens = 24576
+                                    
+                                    # Check for streaming/tool conflicts
+                                    has_conflict = ModelConfigurations._check_streaming_tool_conflict(model_id, model_data)
+                                    
                                     config = ModelConfig(
                                         model_id=model_id,
                                         display_name=model_data.get("name", model_id),
@@ -115,19 +123,20 @@ class ModelConfigurations:
                                             if provider == Provider.OPENROUTER
                                             else None
                                         ),
+                                        max_tokens=max_tokens,
                                         description=model_data.get("description", ""),
                                         type=model_type,
                                         capabilities=capabilities,
                                         supported_parameters=model_data.get(
                                             "supported_parameters", []
                                         ),
+                                        has_streaming_tool_conflict=has_conflict,
                                         system_message=ModelConfigurations._generate_system_message(
                                             model_id, model_data.get("name", "")
                                         ),
                                         indicator_emoji=ModelConfigurations._get_indicator_emoji(
                                             provider, model_type
                                         ),
-                                        max_tokens=max_tokens,
                                         supports_images="supports_images"
                                         in capabilities,
                                         supports_documents="supports_documents"
@@ -150,11 +159,17 @@ class ModelConfigurations:
                             model_type = ModelConfigurations._determine_model_type(
                                 capabilities
                             )
-                            max_tokens = 32000
+                            max_tokens = 48000
                             description = model_data.get("description", "").lower()
                             if "reasoning" in description or "thinking" in description:
                                 max_tokens = 65536
-                            elif "code" in description or "programming" in description:
+                            elif any(
+                                keyword in description
+                                for keyword in [
+                                    "code", "coding", "programming", "software engineering", 
+                                    "agentic coding", "coder", "development", "swe-bench"
+                                ]
+                            ):
                                 max_tokens = 49152
                             elif any(
                                 keyword in description
@@ -163,6 +178,10 @@ class ModelConfigurations:
                                 max_tokens = 16384
                             elif "vision" in description or "multimodal" in description:
                                 max_tokens = 24576
+                            
+                            # Check for streaming/tool conflicts  
+                            has_conflict = ModelConfigurations._check_streaming_tool_conflict(model_id, model_data)
+                            
                             config = ModelConfig(
                                 model_id=model_id,
                                 display_name=model_data.get("name", model_id),
@@ -178,6 +197,7 @@ class ModelConfigurations:
                                 supported_parameters=model_data.get(
                                     "supported_parameters", []
                                 ),
+                                has_streaming_tool_conflict=has_conflict,
                                 system_message=ModelConfigurations._generate_system_message(
                                     model_id, model_data.get("name", "")
                                 ),
@@ -247,21 +267,53 @@ class ModelConfigurations:
 
     @staticmethod
     def _determine_provider_from_id(model_id: str) -> Provider:
-        """Determine provider from model ID."""
-        if model_id.startswith("gemini"):
-            return Provider.GEMINI
-        elif model_id.startswith("google/gemini"):
-            return Provider.GEMINI
-        elif model_id.startswith("google/gemma"):
-            # Gemma models should use OpenRouter, not Gemini API
+        """Determine provider from model ID based on prefixes and patterns."""
+        # Direct provider mapping based on model ID patterns
+        provider_patterns = {
+            "gemini": Provider.GEMINI,
+            "google/gemini": Provider.GEMINI,
+            "deepseek/": Provider.DEEPSEEK,
+        }
+        
+        model_lower = model_id.lower()
+        
+        # Check exact matches first
+        for pattern, provider in provider_patterns.items():
+            if model_lower.startswith(pattern.lower()):
+                # Special case: Gemma models use OpenRouter despite google/ prefix
+                if "gemma" in model_lower and provider == Provider.GEMINI:
+                    return Provider.OPENROUTER
+                return provider
+                
+        # Default provider based on model characteristics
+        # If it contains provider-specific indicators, use those
+        if any(indicator in model_lower for indicator in ["openai/", "anthropic/", "meta-llama/", "mistral/"]):
             return Provider.OPENROUTER
-        elif model_id.startswith("google/"):
-            # Other Google models (like LaMDA, PaLM, etc.) use OpenRouter
-            return Provider.OPENROUTER
-        elif model_id.startswith("deepseek/"):
-            return Provider.DEEPSEEK
-        else:
-            return Provider.OPENROUTER
+        
+        # If no specific provider detected, determine from context or return None for unknown
+        # This allows for future provider additions without hardcoding defaults
+        return Provider.OPENROUTER  
+
+    @staticmethod
+    def _check_streaming_tool_conflict(model_id: str, model_data: Dict[str, Any]) -> bool:
+        """Check if a model has known streaming/tool conflicts based on patterns."""
+        # Check for known patterns that cause streaming/tool conflicts
+        model_lower = model_id.lower()
+        description = model_data.get("description", "").lower()
+        
+        # Meta Llama models with 'free' tier often have streaming conflicts
+        if "meta-llama" in model_lower and "free" in model_lower:
+            return True
+            
+        # Check description for streaming limitations
+        if "streaming" in description and "limited" in description:
+            return True
+            
+        # Models from ModelRun provider often have streaming conflicts
+        if "modelrun" in description:
+            return True
+            
+        return False
 
     @staticmethod
     def _extract_capabilities_from_model_data(model_data: Dict[str, Any]) -> List[str]:
@@ -539,6 +591,12 @@ class ModelConfigurations:
             if model_id.startswith("google/"):
                 # Some Google models on OpenRouter may not support system messages
                 return False
+        elif model_config.provider == Provider.GEMINI:
+            # Gemini models generally support system messages
+            return True
+        elif model_config.provider == Provider.DEEPSEEK:
+            # DeepSeek models generally support system messages
+            return True
 
         # Default to True for most models
         return True
@@ -705,16 +763,30 @@ class ModelConfigurations:
         return adapted_params
 
     @staticmethod
+    def model_has_streaming_tool_conflict(model_id: str) -> bool:
+        """Check if model has streaming/tool conflicts."""
+        model_config = ModelConfigurations.get_all_models().get(model_id)
+        return model_config.has_streaming_tool_conflict if model_config else False
+
+    @staticmethod
     def get_free_models() -> Dict[str, ModelConfig]:
-        """Get all free models (OpenRouter models with :free suffix)."""
+        """Get all free tier models (models with :free suffix or equivalent)."""
         all_models = ModelConfigurations.get_all_models()
-        return {
-            k: v
-            for k, v in all_models.items()
-            if v.provider == Provider.OPENROUTER
-            and v.openrouter_model_key
-            and ":free" in v.openrouter_model_key
-        }
+        free_models = {}
+        
+        for k, v in all_models.items():
+            # Check for :free suffix in model ID or openrouter key
+            is_free = ":free" in k.lower() or (v.openrouter_model_key and ":free" in v.openrouter_model_key)
+            
+            # Also check for other free tier indicators
+            if not is_free and v.description:
+                free_indicators = ["free", "community", "open access"]
+                is_free = any(indicator in v.description.lower() for indicator in free_indicators)
+            
+            if is_free:
+                free_models[k] = v
+                
+        return free_models
 
     @staticmethod
     def add_openrouter_models(additional_models: List[Dict[str, Any]]) -> None:
@@ -741,14 +813,28 @@ class ModelConfigurations:
                     )
         current_models = ModelConfigurations.get_all_models()
         for model_data in additional_models:
+            # Check for streaming/tool conflicts
+            has_conflict = ModelConfigurations._check_streaming_tool_conflict(
+                model_data["model_id"], model_data
+            )
+            
+            # Determine provider from model ID or explicit provider specification
+            provider = model_data.get("provider")
+            if provider:
+                if isinstance(provider, str):
+                    provider = Provider(provider.lower())
+            else:
+                provider = ModelConfigurations._determine_provider_from_id(model_data["model_id"])
+            
             model_config = ModelConfig(
                 model_id=model_data["model_id"],
                 display_name=model_data["display_name"],
-                provider=Provider.OPENROUTER,
+                provider=provider,
                 openrouter_model_key=model_data["openrouter_model_key"],
                 indicator_emoji=model_data.get("indicator_emoji", "🤖"),
                 system_message=model_data.get("system_message"),
                 description=model_data.get("description", ""),
+                has_streaming_tool_conflict=has_conflict,
             )
             current_models[model_data["model_id"]] = model_config
 

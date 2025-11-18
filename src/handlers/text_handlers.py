@@ -750,8 +750,8 @@ class TextHandler:
         ):
             base_max_tokens = model_config.max_tokens
         else:
-            # Fallback to conservative default
-            base_max_tokens = 6000
+            # Fallback to more generous default for better responses
+            base_max_tokens = 16000
 
         # Adjust max_tokens based on request type and provider limits
         # DeepSeek has 8193 token limit (input + output combined)
@@ -763,14 +763,16 @@ class TextHandler:
             if is_deepseek:
                 max_tokens = min(base_max_tokens, 7500)
             else:
-                max_tokens = min(base_max_tokens, 12000)
+                # For other providers, allow much larger responses for long-form content
+                max_tokens = min(base_max_tokens, 32000)
         else:
             # For DeepSeek, cap at 7500 to stay within 8193 total limit
             # Error: "inputs tokens + max_new_tokens must be <= 8193"
             if is_deepseek:
                 max_tokens = min(base_max_tokens, 7500)
             else:
-                max_tokens = min(base_max_tokens, 8000)
+                # For other providers, allow larger responses for better context
+                max_tokens = min(base_max_tokens, 16000)
         base_timeout = 60.0
         model_timeout = base_timeout
         complex_indicators = [

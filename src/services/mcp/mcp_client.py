@@ -433,16 +433,15 @@ class MCPServerClient:
                 env={**os.environ, **config.get("env", {})},
             )
             try:
-                conn_timeout = 120.0 if os.getenv("INSIDE_DOCKER") else 60.0
+                conn_timeout = 30.0 if os.getenv("INSIDE_DOCKER") else 15.0
                 async with asyncio.timeout(conn_timeout):
                     async with stdio_client(server_params) as (stdio, write):
                         self.stdio, self.write = stdio, write
                         async with ClientSession(self.stdio, self.write) as session:
                             self.session = session
                             try:
-                                # Extended initialization timeout for heavy servers like office-word-mcp-server
                                 init_timeout = (
-                                    90.0 if os.getenv("INSIDE_DOCKER") else 45.0
+                                    15.0 if os.getenv("INSIDE_DOCKER") else 10.0
                                 )
                                 async with asyncio.timeout(init_timeout):
                                     await session.initialize()
@@ -453,7 +452,7 @@ class MCPServerClient:
                                 return False
                             try:
                                 list_timeout = (
-                                    60.0 if os.getenv("INSIDE_DOCKER") else 30.0
+                                    10.0 if os.getenv("INSIDE_DOCKER") else 5.0
                                 )
                                 async with asyncio.timeout(list_timeout):
                                     response = await session.list_tools()
@@ -791,7 +790,8 @@ class MCPManager:
                     connection_tasks.append(task)
                 if connection_tasks:
                     try:
-                        global_timeout = 300.0 if os.getenv("INSIDE_DOCKER") else 120.0
+                        # Reduced timeout for faster startup - broken servers should fail quickly
+                        global_timeout = 30.0  # 30 seconds total for all servers
                         done, pending = await asyncio.wait(
                             connection_tasks,
                             timeout=global_timeout,
@@ -859,7 +859,8 @@ class MCPManager:
             else:
                 client = MCPServerClient({server_name: server_config}, server_name)
             try:
-                server_timeout = 120.0 if os.getenv("INSIDE_DOCKER") else 60.0
+                # Reduced timeout for faster startup - broken servers should fail quickly
+                server_timeout = 10.0  # 10 seconds per server
                 async with asyncio.timeout(server_timeout):
                     success = await client.connect()
             except asyncio.TimeoutError:

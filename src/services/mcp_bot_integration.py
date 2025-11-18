@@ -34,7 +34,8 @@ class MCPBotIntegration:
             self.logger.info("Initializing MCP integration...")
             self.mcp_manager = MCPManager()
             try:
-                load_timeout = 300.0 if os.getenv("INSIDE_DOCKER") else 120.0
+                # Reduced timeout for faster startup
+                load_timeout = 30.0  # 30 seconds total
                 async with asyncio.timeout(load_timeout):
                     success = await self.mcp_manager.load_servers()
             except asyncio.TimeoutError:

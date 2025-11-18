@@ -240,7 +240,7 @@ class OpenRouterAPI:
     ) -> Optional[str]:
         try:
             if max_tokens is None:
-                max_tokens = 32768
+                max_tokens = 48000
             final_system_message = (
                 system_message
                 or "You are an advanced AI assistant that helps users with various tasks. Be concise, helpful, and accurate."
@@ -367,7 +367,7 @@ class OpenRouterAPI:
                 if model_config and hasattr(model_config, "max_tokens"):
                     max_tokens = model_config.max_tokens
                 else:
-                    max_tokens = 32768
+                    max_tokens = 48000
 
             # Handle BytesIO object and encode image as base64
             import base64
