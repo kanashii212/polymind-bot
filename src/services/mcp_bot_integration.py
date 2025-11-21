@@ -147,7 +147,7 @@ class MCPBotIntegration:
         user_id: int,
         model: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 2000,
+        max_tokens: Optional[int] = None,
         **kwargs,
     ) -> Optional[str]:
         """
@@ -175,6 +175,12 @@ class MCPBotIntegration:
             self.logger.info(
                 f"Generating MCP-enhanced response for user {user_id} with model {model}"
             )
+            
+            if max_tokens is None:
+                from src.services.model_handlers.model_configs import ModelConfigurations
+                model_config = ModelConfigurations.get_all_models().get(model)
+                max_tokens = model_config.max_tokens if model_config else 128000
+            
             response = await self.openrouter_with_mcp.generate_response_with_mcp_tools(
                 prompt=prompt,
                 model=model,

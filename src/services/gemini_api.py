@@ -47,7 +47,7 @@ class GeminiAPI:
             temperature=0.7,
             top_p=0.95,
             top_k=40,
-            max_output_tokens=32768,
+            max_output_tokens=128000,
         )
         self.context_recent_limit = 18
         self.logger.info(
@@ -1108,7 +1108,7 @@ Focus on providing the most helpful and accurate response possible using the ava
         image_context: Optional[str] = None,
         document_context: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 32768,
+        max_tokens: int = 128000,
         model: Optional[str] = None,  # Added for compatibility with fallback handler
         quoted_message: Optional[str] = None,
         attachments: Optional[List] = None,  # New parameter for image attachments

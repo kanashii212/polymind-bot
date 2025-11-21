@@ -14,10 +14,10 @@ from src.services.memory_context.memory_manager import MemoryManager
 from src.services.memory_context.model_history_manager import ModelHistoryManager
 from src.services.model_handlers.factory import ModelHandlerFactory
 from src.services.model_handlers.prompt_formatter import PromptFormatter
+from src.services.model_handlers.model_configs import ModelConfigurations
 from src.services.memory_context.conversation_manager import ConversationManager
 from .text_processing.media_analyzer import MediaAnalyzer
 from .text_processing.utilities import MediaUtilities
-from .model_fallback_handler import ModelFallbackHandler
 from src.services.ai_command_router import EnhancedIntentDetector
 from src.services.mcp_bot_integration import (
     generate_mcp_response,
@@ -45,7 +45,7 @@ class TextHandler:
             db=user_data_manager.db if hasattr(user_data_manager, "db") else None,
         )
         self.memory_manager.short_term_limit = 15
-        self.memory_manager.token_limit = 8192
+        self.memory_manager.token_limit = 64000  # Increased for longer context support
         self.model_history_manager = ModelHistoryManager(self.memory_manager)
         self.context_handler = MessageContextHandler()
         self.response_formatter = ResponseFormatter()
@@ -54,7 +54,6 @@ class TextHandler:
             self.memory_manager, self.model_history_manager
         )
         self.media_analyzer = MediaAnalyzer(gemini_api, openrouter_api)
-        self.model_fallback_handler = ModelFallbackHandler(self.response_formatter)
         self.intent_detector = EnhancedIntentDetector()
         self.user_model_manager = None
 
@@ -735,44 +734,7 @@ class TextHandler:
         is_long_form_request = any(
             indicator in message_text.lower() for indicator in long_form_indicators
         )
-        from src.services.model_handlers.model_configs import (
-            ModelConfigurations,
-            Provider,
-        )
-
         model_config = ModelConfigurations.get_all_models().get(preferred_model)
-        # Determine max_tokens based on model and request type
-        # Different models have different context length limits
-        if (
-            model_config
-            and hasattr(model_config, "max_tokens")
-            and model_config.max_tokens
-        ):
-            base_max_tokens = model_config.max_tokens
-        else:
-            # Fallback to more generous default for better responses
-            base_max_tokens = 16000
-
-        # Adjust max_tokens based on request type and provider limits
-        # DeepSeek has 8193 token limit (input + output combined)
-        is_deepseek = model_config and model_config.provider == Provider.DEEPSEEK
-
-        if is_long_form_request:
-            # For DeepSeek, cap at 7500 to stay within 8193 total limit
-            # This leaves ~693 tokens minimum for input context
-            if is_deepseek:
-                max_tokens = min(base_max_tokens, 7500)
-            else:
-                # For other providers, allow much larger responses for long-form content
-                max_tokens = min(base_max_tokens, 32000)
-        else:
-            # For DeepSeek, cap at 7500 to stay within 8193 total limit
-            # Error: "inputs tokens + max_new_tokens must be <= 8193"
-            if is_deepseek:
-                max_tokens = min(base_max_tokens, 7500)
-            else:
-                # For other providers, allow larger responses for better context
-                max_tokens = min(base_max_tokens, 16000)
         base_timeout = 60.0
         model_timeout = base_timeout
         complex_indicators = [
@@ -797,15 +759,9 @@ class TextHandler:
             indicator in message_text.lower() for indicator in complex_indicators
         )
         if is_complex_question:
-            if is_deepseek:
-                model_timeout = 300.0
-            else:
-                model_timeout = 120.0
+            model_timeout = 120.0
         elif is_long_form_request:
-            if is_deepseek:
-                model_timeout = 240.0
-            else:
-                model_timeout = 90.0
+            model_timeout = 90.0
         if self.user_model_manager:
             model_config = self.user_model_manager.get_user_model_config(user_id)
             model_timeout = (
@@ -825,7 +781,6 @@ class TextHandler:
                     user_id=user_id,
                     model=preferred_model,
                     temperature=0.7,
-                    max_tokens=max_tokens,
                     context=history_context,
                 )
                 if mcp_response:
@@ -843,44 +798,42 @@ class TextHandler:
                     self.logger.debug(
                         f"MCP response failed for user {user_id}, using regular processing"
                     )
-                    (
-                        response,
-                        actual_model_used,
-                    ) = await self.model_fallback_handler.attempt_with_fallback(
-                        primary_model=preferred_model,
-                        model_handler_factory=ModelHandlerFactory,
-                        enhanced_prompt=enhanced_prompt_with_guidelines,
-                        history_context=history_context,
-                        max_tokens=max_tokens,
-                        model_timeout=model_timeout,
-                        message=message,
-                        is_complex_question=is_complex_question,
-                        quoted_text=quoted_text,
+                    model_handler = ModelHandlerFactory.get_model_handler(
+                        preferred_model,
                         gemini_api=self.gemini_api,
                         openrouter_api=self.openrouter_api,
                         deepseek_api=self.deepseek_api,
                     )
+                    response = await asyncio.wait_for(
+                        model_handler.generate_response(
+                            enhanced_prompt_with_guidelines,
+                            history_context,
+                            quoted_message=quoted_text,
+                            model=preferred_model,
+                        ),
+                        timeout=model_timeout
+                    )
+                    actual_model_used = preferred_model
             else:
                 self.logger.debug(
                     f"Model {preferred_model} not MCP compatible, using regular processing"
                 )
-                (
-                    response,
-                    actual_model_used,
-                ) = await self.model_fallback_handler.attempt_with_fallback(
-                    primary_model=preferred_model,
-                    model_handler_factory=ModelHandlerFactory,
-                    enhanced_prompt=enhanced_prompt_with_guidelines,
-                    history_context=history_context,
-                    max_tokens=max_tokens,
-                    model_timeout=model_timeout,
-                    message=message,
-                    is_complex_question=is_complex_question,
-                    quoted_text=quoted_text,
+                model_handler = ModelHandlerFactory.get_model_handler(
+                    preferred_model,
                     gemini_api=self.gemini_api,
                     openrouter_api=self.openrouter_api,
                     deepseek_api=self.deepseek_api,
                 )
+                response = await asyncio.wait_for(
+                    model_handler.generate_response(
+                        enhanced_prompt_with_guidelines,
+                        history_context,
+                        quoted_message=quoted_text,
+                        model=preferred_model,
+                    ),
+                    timeout=model_timeout
+                )
+                actual_model_used = preferred_model
             if response:
                 response = self._clean_response_content(response)
             if response:
@@ -937,18 +890,12 @@ class TextHandler:
         except asyncio.TimeoutError:
             if thinking_message is not None:
                 await thinking_message.delete()
-            if is_deepseek:
-                if is_complex_question:
-                    timeout_message = "⏱️ DeepSeek R1 is thoroughly analyzing your complex question but needs more time. This usually means a very detailed response is being prepared. Please try again or break the question into smaller parts."
-                else:
-                    timeout_message = "⏱️ DeepSeek R1 timed out. The model may be experiencing high load. Please try again in a moment."
+            if is_complex_question:
+                timeout_message = "⏱️ Your complex question required more processing time than available. For detailed comparisons and analyses, try breaking it into smaller parts or asking again."
+            elif is_long_form_request:
+                timeout_message = "⏱️ Your long-form request timed out. Try asking for a shorter response or break it into multiple questions."
             else:
-                if is_complex_question:
-                    timeout_message = "⏱️ Your complex question required more processing time than available. For detailed comparisons and analyses, try breaking it into smaller parts or asking again."
-                elif is_long_form_request:
-                    timeout_message = "⏱️ Your long-form request timed out. Try asking for a shorter response or break it into multiple questions."
-                else:
-                    timeout_message = "⏱️ Sorry, the request took too long to process. Please try again or rephrase your question."
+                timeout_message = "⏱️ Sorry, the request took too long to process. Please try again or rephrase your question."
             await self.response_formatter.safe_send_message(message, timeout_message)
         except Exception as e:
             self.logger.error(f"Error generating response: {e}")

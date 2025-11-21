@@ -146,7 +146,7 @@ class OpenRouterAPIWithMCP(OpenRouterAPI):
             ),
             provider=provider,
             tool_format=self._determine_tool_format(model),
-            max_tokens=model_config.max_tokens if model_config else 32768,
+            max_tokens=model_config.max_tokens if model_config else 128000,
         )
 
         self._model_capabilities_cache[model] = capabilities
@@ -265,7 +265,6 @@ class OpenRouterAPIWithMCP(OpenRouterAPI):
             context: Conversation context
             model: Optional model override (if None, uses default)
             temperature: Sampling temperature
-            max_tokens: Maximum tokens to generate
             timeout: Request timeout
 
         Returns:
@@ -334,31 +333,31 @@ class OpenRouterAPIWithMCP(OpenRouterAPI):
         # Check for known conflicts
         if self._has_known_conflicts(actual_model, mcp_tools, capabilities):
             return await self._fallback_to_standard_generation(
-                prompt, context, actual_model, temperature, max_tokens, timeout
+                prompt, context, actual_model, temperature, timeout
             )
 
-        # Generate with or without tools
-        if mcp_tools:
-            self.logger.info(f"Using {len(mcp_tools)} MCP tools for {actual_model}")
-            return await self.generate_response_with_tools(
-                prompt=prompt,
-                tools=mcp_tools,
-                context=context,
-                model=actual_model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=timeout,
-            )
-        else:
-            self.logger.info(f"No MCP tools available for {actual_model}")
-            return await self.generate_response(
-                prompt=prompt,
-                context=context,
-                model=actual_model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=timeout,
-            )
+            # Generate with or without tools
+            if mcp_tools:
+                self.logger.info(f"Using {len(mcp_tools)} MCP tools for {actual_model}")
+                return await self.generate_response_with_tools(
+                    prompt=prompt,
+                    tools=mcp_tools,
+                    context=context,
+                    model=actual_model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                )
+            else:
+                self.logger.info(f"No MCP tools available for {actual_model}")
+                return await self.generate_response(
+                    prompt=prompt,
+                    context=context,
+                    model=actual_model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                )
 
     def _resolve_model_and_capabilities(
         self, model: Optional[str]
@@ -402,7 +401,6 @@ class OpenRouterAPIWithMCP(OpenRouterAPI):
         context: Optional[List[Dict]],
         model: str,
         temperature: float,
-        max_tokens: Optional[int],
         timeout: float,
     ) -> Optional[str]:
         """Fallback to standard generation without tools."""
@@ -415,7 +413,6 @@ class OpenRouterAPIWithMCP(OpenRouterAPI):
             context=context,
             model=model,
             temperature=temperature,
-            max_tokens=max_tokens,
             timeout=timeout,
         )
 
@@ -476,7 +473,6 @@ class OpenRouterAPIWithMCP(OpenRouterAPI):
             context: Conversation context
             model: Optional model to use (if None, uses default)
             temperature: Sampling temperature
-            max_tokens: Maximum tokens to generate
             timeout: Request timeout
 
         Returns:
@@ -559,15 +555,17 @@ class OpenRouterAPIWithMCP(OpenRouterAPI):
         timeout: float,
     ) -> Dict[str, Any]:
         """Build request parameters dictionary."""
-        return {
+        params = {
             "model": model,
             "messages": messages,
             "tools": tools,
             "temperature": temperature,
-            "max_tokens": max_tokens,
             "timeout": timeout,
             "stream": False,
         }
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
+        return params
 
     def _has_tool_calls(self, response) -> bool:
         """Check if response contains tool calls."""
@@ -650,10 +648,11 @@ class OpenRouterAPIWithMCP(OpenRouterAPI):
             "model": model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
             "timeout": timeout,
             "stream": False,
         }
+        if max_tokens is not None:
+            final_request_params["max_tokens"] = max_tokens
 
         final_adapted_params = ModelConfigurations.adapt_request_for_model(
             model, final_request_params

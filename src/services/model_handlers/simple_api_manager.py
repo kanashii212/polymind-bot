@@ -7,11 +7,11 @@ This single file replaces:
 - model_configs.py
 - unified_handler.py
 Benefits:
-✅ One file to manage all APIs
-✅ Easy to add new models/providers
-✅ Simplified switching between models
-✅ Reduced code complexity
-✅ Centralized configuration
+One file to manage all APIs
+Easy to add new models/providers
+Simplified switching between models
+Reduced code complexity
+Centralized configuration
 """
 
 import logging
@@ -44,7 +44,7 @@ class ModelConfig:
     description: str = ""
     system_message: str = ""
     openrouter_key: Optional[str] = None
-    max_tokens: int = 32000
+    max_tokens: int = 128000
     type: str = "general_purpose"
 
 
@@ -69,7 +69,7 @@ PROVIDER_GROUPS = {
 
 class SuperSimpleAPIManager:
     """
-    🚀 SUPER SIMPLE API MANAGER 🚀
+     SUPER SIMPLE API MANAGER 
     One class to rule them all! Manages Gemini, OpenRouter, and DeepSeek
     through a single, easy-to-use interface.
     """
@@ -90,7 +90,7 @@ class SuperSimpleAPIManager:
         self._setup_models()
 
     def _setup_models(self):
-        """🎨 Configure all your models here - Easy to add new ones!"""
+        """ Configure all your models here - Easy to add new ones!"""
         from src.services.model_handlers.model_configs import (
             ModelConfigurations,
             Provider,
@@ -184,7 +184,7 @@ class SuperSimpleAPIManager:
         prompt: str,
         context: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7,
-        max_tokens: int = 32000,
+        max_tokens: Optional[int] = None,
         quoted_message: Optional[str] = None,
     ) -> str:
         """🎯 Universal chat method - works with any model!"""
@@ -194,14 +194,16 @@ class SuperSimpleAPIManager:
         api = self.apis.get(model_config.provider)
         if not api:
             return f"❌ API for {model_config.provider.value} not available!"
-        if max_tokens == 32000:
-            max_tokens = self._determine_optimal_tokens(prompt, model_config)
         try:
             if model_config.system_message and context:
                 context = [
                     {"role": "system", "content": model_config.system_message}
                 ] + context
-            max_tokens = self._determine_optimal_tokens(prompt, model_config)
+            
+            if max_tokens is None:
+                max_tokens = self._determine_optimal_tokens(prompt, model_config)
+            else:
+                max_tokens = min(max_tokens, model_config.max_tokens)
             if model_config.provider == APIProvider.GEMINI:
                 return await self._call_gemini(api, prompt, context)
             elif model_config.provider == APIProvider.DEEPSEEK:
@@ -220,41 +222,15 @@ class SuperSimpleAPIManager:
 
     def _determine_optimal_tokens(self, prompt: str, model_config: ModelConfig) -> int:
         """Determine optimal max_tokens based on prompt and model capabilities"""
-        prompt_length = len(prompt)
-        long_form_indicators = [
-            "write a",
-            "generate",
-            "create",
-            "explain in detail",
-            "step by step",
-            "tutorial",
-            "guide",
-            "comprehensive",
-            "list",
-            "examples",
-            "detailed",
-            "analysis",
-            "comparison",
-            "pros and cons",
-            "advantages",
-            "disadvantages",
-            "100",
-            "q&a",
-            "qcm",
-            "questions",
-            "document",
-            "essay",
-            "article",
-        ]
-        is_long_form = any(
-            indicator in prompt.lower() for indicator in long_form_indicators
-        )
-        if is_long_form or prompt_length > 500:
-            return min(32000, model_config.max_tokens)
-        elif prompt_length > 200:
-            return min(16000, model_config.max_tokens)
-        else:
-            return min(8000, model_config.max_tokens)
+        from src.services.model_handlers.model_configs import ModelConfigurations
+        
+        model_configs = ModelConfigurations.get_all_models()
+        full_config = model_configs.get(model_config.model_id)
+        
+        if full_config and hasattr(full_config, 'max_tokens'):
+            return full_config.max_tokens
+        
+        return model_config.max_tokens if hasattr(model_config, 'max_tokens') else 128000
 
     async def _call_gemini(
         self, api: GeminiAPI, prompt: str, context: Optional[List]

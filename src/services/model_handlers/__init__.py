@@ -20,7 +20,7 @@ class ModelHandler(ABC):
         prompt: str,
         context: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7,
-        max_tokens: int = 32000,
+        max_tokens: int = 128000,
         quoted_message: Optional[str] = None,
         attachments: Optional[List[ImageAttachment]] = None,
     ) -> str:

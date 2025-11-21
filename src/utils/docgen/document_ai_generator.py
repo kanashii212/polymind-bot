@@ -38,7 +38,7 @@ class AIDocumentGenerator:
         document_type: str = "article",
         model: str = "gemini",
         additional_context: Optional[str] = None,
-        max_tokens: int = 32000,
+        max_tokens: int = 128000,
     ) -> Tuple[bytes, str]:
         try:
             system_prompt = self._get_document_prompt(document_type)

@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import asyncio
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from openai import AsyncOpenAI, AuthenticationError, RateLimitError, APIError
@@ -144,6 +145,10 @@ class OpenRouterAPI:
                 else:
                     max_tokens = 32768
 
+            # For OpenRouter models, be conservative with max_tokens to avoid exceeding context limits
+            # Use 75% of the configured max_tokens or 24576, whichever is smaller
+            max_tokens = min(max_tokens * 0.75, 24576)
+
             system_message = self._build_system_message(model, context)
 
             # Handle quoted message context
@@ -176,7 +181,22 @@ class OpenRouterAPI:
                 model, request_params
             )
 
-            response = await self.client.chat.completions.create(**adapted_params)
+            max_retries = 3
+            for attempt in range(max_retries + 1):
+                try:
+                    response = await self.client.chat.completions.create(**adapted_params)
+                    break
+                except RateLimitError as e:
+                    if attempt < max_retries:
+                        retry_after = getattr(e, 'retry_after', 1 * (2 ** attempt))
+                        self.logger.warning(f"Rate limit hit for model {model}, retrying in {retry_after} seconds. Attempt {attempt + 1}/{max_retries + 1}")
+                        await asyncio.sleep(retry_after)
+                    else:
+                        self.api_failures += 1
+                        self.api_last_failure = time.time()
+                        error_message = "Rate limit exceeded. Please try again later."
+                        self.logger.error(f"OpenRouter API rate limit error: {str(e)}")
+                        return f"OpenRouter API error: {error_message}"
             if response.choices and len(response.choices) > 0:
                 message_content = response.choices[0].message.content
                 finish_reason = response.choices[0].finish_reason
@@ -197,12 +217,6 @@ class OpenRouterAPI:
                 "Authentication error. Please check your OpenRouter API key."
             )
             self.logger.error(f"OpenRouter API authentication error: {str(e)}")
-            return f"OpenRouter API error: {error_message}"
-        except RateLimitError as e:
-            self.api_failures += 1
-            self.api_last_failure = time.time()
-            error_message = "Rate limit exceeded. Please try again later."
-            self.logger.error(f"OpenRouter API rate limit error: {str(e)}")
             return f"OpenRouter API error: {error_message}"
         except APIError as e:
             self.api_failures += 1
@@ -241,6 +255,8 @@ class OpenRouterAPI:
         try:
             if max_tokens is None:
                 max_tokens = 48000
+            # For OpenRouter models, be conservative with max_tokens to avoid exceeding context limits
+            max_tokens = min(max_tokens * 0.75, 24576)
             final_system_message = (
                 system_message
                 or "You are an advanced AI assistant that helps users with various tasks. Be concise, helpful, and accurate."
@@ -268,7 +284,22 @@ class OpenRouterAPI:
                 openrouter_model_key, request_params
             )
 
-            response = await self.client.chat.completions.create(**adapted_params)
+            max_retries = 3
+            for attempt in range(max_retries + 1):
+                try:
+                    response = await self.client.chat.completions.create(**adapted_params)
+                    break
+                except RateLimitError as e:
+                    if attempt < max_retries:
+                        retry_after = getattr(e, 'retry_after', 1 * (2 ** attempt))
+                        self.logger.warning(f"Rate limit hit for model {openrouter_model_key}, retrying in {retry_after} seconds. Attempt {attempt + 1}/{max_retries + 1}")
+                        await asyncio.sleep(retry_after)
+                    else:
+                        self.api_failures += 1
+                        self.api_last_failure = time.time()
+                        error_message = "Rate limit exceeded. Please try again later."
+                        self.logger.error(f"OpenRouter API rate limit error: {str(e)}")
+                        return f"OpenRouter API error: {error_message}"
             if response.choices and len(response.choices) > 0:
                 content = response.choices[0].message.content
                 self.api_failures = 0
@@ -280,11 +311,6 @@ class OpenRouterAPI:
             self.api_last_failure = time.time()
             self.logger.error(f"OpenRouter API authentication error: {str(e)}")
             return "Authentication error. Please check your OpenRouter API key."
-        except RateLimitError as e:
-            self.api_failures += 1
-            self.api_last_failure = time.time()
-            self.logger.error(f"OpenRouter API rate limit error: {str(e)}")
-            return "Rate limit exceeded. Please try again later."
         except APIError as e:
             self.api_failures += 1
             self.api_last_failure = time.time()
@@ -369,6 +395,9 @@ class OpenRouterAPI:
                 else:
                     max_tokens = 48000
 
+            # For OpenRouter models, be conservative with max_tokens to avoid exceeding context limits
+            max_tokens = min(max_tokens * 0.75, 24576)
+
             # Handle BytesIO object and encode image as base64
             import base64
             import io
@@ -436,7 +465,22 @@ class OpenRouterAPI:
             self.logger.info(
                 f"Sending vision request to OpenRouter model: {openrouter_model}"
             )
-            response = await self.client.chat.completions.create(**adapted_params)
+            max_retries = 3
+            for attempt in range(max_retries + 1):
+                try:
+                    response = await self.client.chat.completions.create(**adapted_params)
+                    break
+                except RateLimitError as e:
+                    if attempt < max_retries:
+                        retry_after = getattr(e, 'retry_after', 1 * (2 ** attempt))
+                        self.logger.warning(f"Rate limit hit for model {model}, retrying in {retry_after} seconds. Attempt {attempt + 1}/{max_retries + 1}")
+                        await asyncio.sleep(retry_after)
+                    else:
+                        self.api_failures += 1
+                        self.api_last_failure = time.time()
+                        error_message = "Rate limit exceeded. Please try again later."
+                        self.logger.error(f"OpenRouter API rate limit error: {str(e)}")
+                        return f"OpenRouter API error: {error_message}"
 
             if response.choices and len(response.choices) > 0:
                 message_content = response.choices[0].message.content
@@ -462,12 +506,6 @@ class OpenRouterAPI:
                 "Authentication error. Please check your OpenRouter API key."
             )
             self.logger.error(f"OpenRouter API authentication error: {str(e)}")
-            return f"OpenRouter API error: {error_message}"
-        except RateLimitError as e:
-            self.api_failures += 1
-            self.api_last_failure = time.time()
-            error_message = "Rate limit exceeded. Please try again later."
-            self.logger.error(f"OpenRouter API rate limit error: {str(e)}")
             return f"OpenRouter API error: {error_message}"
         except APIError as e:
             self.api_failures += 1
