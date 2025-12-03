@@ -42,7 +42,6 @@ class BasicCommands:
         keyboard = [
             [
                 InlineKeyboardButton("Help 📚", callback_data="help"),
-                InlineKeyboardButton("Settings ⚙️", callback_data="settings"),
             ],
             [InlineKeyboardButton("Support Channel 📢", url="https://t.me/GemBotAI")],
         ]
@@ -62,7 +61,6 @@ class BasicCommands:
             "/start - Start the bot\n"
             "/help - Show this help message\n"
             "/reset - Reset conversation history\n"
-            "/settings - Configure bot settings\n"
             "/stats - Show bot statistics\n"
             "/genimg - Generate images with Together AI\n"
             "/switchmodel - Switch between AI models\n"

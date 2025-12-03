@@ -11,7 +11,7 @@ from telegram.constants import ChatAction
 from telegram.ext import MessageHandler, filters, ContextTypes
 from src.services.multimodal_processor import TelegramMultimodalProcessor
 from src.handlers.text_handlers import TextHandler
-from src.services.ai_command_router import AICommandRouter
+# from src.services.ai_command_router import AICommandRouter
 from src.utils.docgen.document_processor import DocumentProcessor
 from src.handlers.message_context_handler import MessageContextHandler
 from src.handlers.response_formatter import ResponseFormatter
@@ -55,8 +55,8 @@ class MessageHandlers:
         self.response_formatter = ResponseFormatter()
         self.document_processor = DocumentProcessor(gemini_api)
         self.ai_command_router = None
-        if command_handlers:
-            self.ai_command_router = AICommandRouter(command_handlers, gemini_api)
+        # if command_handlers:
+        #     self.ai_command_router = AICommandRouter(command_handlers, gemini_api)
         self._conversation_manager = None
         self._group_chat_integration = None
         self.all_models = ModelConfigurations.get_all_models()

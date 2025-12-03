@@ -18,7 +18,7 @@ from src.services.model_handlers.model_configs import ModelConfigurations
 from src.services.memory_context.conversation_manager import ConversationManager
 from .text_processing.media_analyzer import MediaAnalyzer
 from .text_processing.utilities import MediaUtilities
-from src.services.ai_command_router import EnhancedIntentDetector
+# from src.services.ai_command_router import EnhancedIntentDetector
 from src.services.mcp_bot_integration import (
     generate_mcp_response,
     is_model_mcp_compatible,
@@ -54,7 +54,7 @@ class TextHandler:
             self.memory_manager, self.model_history_manager
         )
         self.media_analyzer = MediaAnalyzer(gemini_api, openrouter_api)
-        self.intent_detector = EnhancedIntentDetector()
+        # self.intent_detector = EnhancedIntentDetector()
         self.user_model_manager = None
 
         # Initialize document sender for MCP-generated documents
