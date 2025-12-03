@@ -25,6 +25,8 @@ from src.services.mcp_bot_integration import (
 )
 from src.utils.bot_username_helper import BotUsernameHelper
 from .document_sender import DocumentSender
+from src.services.memory_context.personalized_rag_system import PersonalizedRAGSystem
+from src.services.memory_context.rag_integration import RAGIntegration
 
 
 class TextHandler:
@@ -54,11 +56,13 @@ class TextHandler:
             self.memory_manager, self.model_history_manager
         )
         self.media_analyzer = MediaAnalyzer(gemini_api, openrouter_api)
-        # self.intent_detector = EnhancedIntentDetector()
         self.user_model_manager = None
 
         # Initialize document sender for MCP-generated documents
         self.document_sender = DocumentSender()
+
+        # Initialize Personalized RAG System
+        self._initialize_rag_system_task = None
 
     class MockMessage:
         def __init__(self, bot, chat_id):
@@ -69,6 +73,25 @@ class TextHandler:
             return await self.bot.send_message(
                 chat_id=self.chat_id, text=text, **kwargs
             )
+
+    async def _initialize_rag_system(self):
+        """Initialize Personalized RAG system for enhanced memory"""
+        try:
+            rag_system = PersonalizedRAGSystem(
+                memory_manager=self.memory_manager,
+                persistence_manager=self.memory_manager.persistence_manager,
+                db=self.user_data_manager.db
+                if hasattr(self.user_data_manager, "db")
+                else None,
+            )
+            self.rag_integration = RAGIntegration(rag_system)
+            self.logger.info(" Personalized RAG system initialized successfully")
+            return True
+        except Exception as e:
+            self.logger.warning(
+                f" Could not initialize RAG system: {e}. Continuing without RAG."
+            )
+            return False
 
     async def handle_text_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -82,27 +105,6 @@ class TextHandler:
         user_id = update.effective_user.id
         message = update.message or update.edited_message
         message_text = message.text
-        # --- NEW: Save user question to history ---
-        if "user_questions" not in context.user_data:
-            context.user_data["user_questions"] = []
-        # Only save non-empty, non-command messages
-        if message_text and not message_text.startswith("/"):
-            context.user_data["user_questions"].append(message_text)
-            # Limit to last 10 questions
-            context.user_data["user_questions"] = context.user_data["user_questions"][
-                -10:
-            ]
-        # --- NEW: Detect "previous question" intent ---
-        if self._is_previous_question_intent(message_text):
-            prev_questions = context.user_data.get("user_questions", [])
-            if prev_questions:
-                response = "Here are your last questions:\n\n" + "\n".join(
-                    [f"{i + 1}. {q}" for i, q in enumerate(prev_questions[:-1])]
-                )
-            else:
-                response = "I don't have any previous questions from you yet."
-            await self.response_formatter.safe_send_message(message, response)
-            return
         chat = update.effective_chat
         is_group = chat and chat.type in ["group", "supergroup"]
         if (
@@ -126,6 +128,10 @@ class TextHandler:
             message
         )
         conversation_id = f"user_{user_id}"
+
+        # Initialize RAG on first message
+        if not hasattr(self, "rag_integration"):
+            await self._initialize_rag_system()
         try:
             if update.edited_message and "bot_messages" in context.user_data:
                 await self._handle_edited_message(update, context)
@@ -164,8 +170,6 @@ class TextHandler:
             await self._send_appropriate_chat_action(
                 update, context, has_attached_media, media_type
             )
-            intent_result = await self.intent_detector.detect_intent(message_text)
-            user_intent = (intent_result.intent, intent_result.confidence)
             preferred_model = await self._get_user_preferred_model(user_id)
             await self.memory_manager.extract_and_save_user_info(user_id, message_text)
             history_context = await self.conversation_manager.get_conversation_history(
@@ -178,7 +182,7 @@ class TextHandler:
                     "content": f"User information: {user_context}",
                 }
                 history_context.insert(0, user_context_message)
-            if has_attached_media and user_intent == "analyze":
+            if has_attached_media:
                 await self._handle_media_analysis(
                     update,
                     context,
@@ -886,6 +890,19 @@ class TextHandler:
                     await self.conversation_manager.save_message_pair(
                         user_id, message_text, response, actual_model_used
                     )
+
+                # Log to personalized RAG memory
+                if hasattr(self, "rag_integration"):
+                    try:
+                        await self.rag_integration.process_user_message(
+                            user_id=user_id, message_content=message_text
+                        )
+                        await self.rag_integration.process_ai_response(
+                            user_id=user_id, response_content=response
+                        )
+                    except Exception as e:
+                        self.logger.debug(f"RAG logging error (non-critical): {e}")
+
             telegram_logger.log_message("Text response sent successfully", user_id)
         except asyncio.TimeoutError:
             if thinking_message is not None:
@@ -1034,22 +1051,6 @@ class TextHandler:
         content = content.strip()
         content = re.sub(r"\n\s*\n\s*\n+", "\n\n", content)
         return content
-
-    def _is_previous_question_intent(self, message_text: str) -> bool:
-        """
-        Detects if the user is asking about their previous questions.
-        """
-        if not message_text:
-            return False
-        lowered = message_text.lower()
-        # Simple keyword-based check, can be improved with NLP
-        return (
-            "previous question" in lowered
-            or "last question" in lowered
-            or "which question did i ask" in lowered
-            or "what did i ask" in lowered
-            or "history of my questions" in lowered
-        )
 
     async def _handle_mcp_document_output(
         self,
