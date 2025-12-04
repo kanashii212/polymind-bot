@@ -36,32 +36,3 @@ jobs:
       with:
         name: bandit-report
         path: bandit-report.json
-
-  frontend-build:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: "20"
-        cache: "npm"
-        cache-dependency-path: temp_zola/package-lock.json
-
-    - name: Install dependencies
-      working-directory: temp_zola
-      run: npm ci
-
-    - name: Type check
-      working-directory: temp_zola
-      run: npm run type-check
-
-    - name: Lint
-      working-directory: temp_zola
-      run: npm run lint
-
-    - name: Build
-      working-directory: temp_zola
-      run: npm run build
