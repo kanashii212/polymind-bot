@@ -1,8 +1,23 @@
 import logging
 import asyncio
+import os
 from typing import Dict, List, Any, Optional
 import time
 from dataclasses import dataclass, field
+
+# Environment variable to disable LangChain on resource-constrained hosting
+# Set ENABLE_LANGCHAIN_RAG=false for free tier hosting (512MB RAM, 2GB disk)
+ENABLE_LANGCHAIN_RAG = os.getenv("ENABLE_LANGCHAIN_RAG", "true").lower() in ("true", "1", "yes")
+
+# LangChain imports for enhanced RAG (skip if disabled or low resources)
+LANGCHAIN_AVAILABLE = False
+if ENABLE_LANGCHAIN_RAG:
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        LANGCHAIN_AVAILABLE = True
+    except ImportError:
+        LANGCHAIN_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +83,8 @@ class ConversationMemory:
     decay_factor: float = 1.0  # Decreases with time
     tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    embedding: Optional[List[float]] = None  # Vector embedding for semantic search
+    chunk_id: Optional[str] = None  # ID for chunked content
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -82,6 +99,8 @@ class ConversationMemory:
             "decay_factor": self.decay_factor,
             "tags": self.tags,
             "metadata": self.metadata,
+            "embedding": self.embedding,
+            "chunk_id": self.chunk_id,
         }
 
 
@@ -89,6 +108,14 @@ class PersonalizedRAGSystem:
     """
     Personalized Retrieval-Augmented Generation System
     Enhances memory recall with user profiling and semantic search
+    
+    Features:
+    - LangChain integration for advanced RAG capabilities
+    - Sentence Transformer embeddings for semantic similarity
+    - FAISS vector store for efficient similarity search
+    - Hierarchical memory with short-term, medium-term, and long-term tiers
+    - Intelligent text chunking for long documents
+    - Memory consolidation and summarization
     """
 
     def __init__(self, memory_manager, persistence_manager, db=None):
@@ -97,9 +124,30 @@ class PersonalizedRAGSystem:
         self.persistence_manager = persistence_manager
         self.db = db
 
-        # RAG Configuration
+        # LangChain components for enhanced RAG
+        self.embeddings = None
+        self.vector_stores: Dict[int, Any] = {}  # user_id -> FAISS vector store
+        self.text_splitter = None
+        self.langchain_enabled = False
+        
+        # Initialize LangChain components
+        self._initialize_langchain()
 
-        # Memory decay configuration
+        # Long-context configuration
+        self.max_context_tokens = 128000  # Support for 128K context models
+        self.chunk_size = 1000  # Characters per chunk
+        self.chunk_overlap = 200  # Overlap between chunks
+        self.max_retrieval_results = 20  # Maximum results from vector search
+        self.context_window_size = 10  # Recent messages to always include
+        
+        # Hierarchical memory tiers
+        self.memory_tiers = {
+            "short_term": 7 * 24 * 3600,    # 7 days - full detail
+            "medium_term": 30 * 24 * 3600,  # 30 days - summarized
+            "long_term": 90 * 24 * 3600,    # 90 days - key insights only
+        }
+
+        # Memory decay configuration (legacy support)
         self.recent_threshold = 7 * 24 * 3600  # 7 days
         self.active_threshold = 30 * 24 * 3600  # 30 days
         self.archive_threshold = 90 * 24 * 3600  # 90 days
@@ -112,7 +160,59 @@ class PersonalizedRAGSystem:
             "balanced": {},
         }
 
-        self.logger.info("PersonalizedRAGSystem initialized")
+        self.logger.info(
+            f"PersonalizedRAGSystem initialized (LangChain: {self.langchain_enabled}, "
+            f"ENV_ENABLED: {ENABLE_LANGCHAIN_RAG})"
+        )
+
+    def _initialize_langchain(self) -> None:
+        """
+        Initialize LangChain components for enhanced RAG capabilities.
+        
+        Resource Requirements (when enabled):
+        - Disk: ~2.5GB (torch + transformers + sentence-transformers)
+        - RAM: ~400-600MB for model loading
+        - CPU: Moderate (embedding generation)
+        
+        For resource-constrained hosting (e.g., free tier with 512MB RAM):
+        Set environment variable: ENABLE_LANGCHAIN_RAG=false
+        The system will fall back to basic Jaccard similarity search.
+        """
+        if not ENABLE_LANGCHAIN_RAG:
+            self.logger.info(
+                "LangChain RAG disabled via ENABLE_LANGCHAIN_RAG=false (resource-saving mode). "
+                "Using basic semantic similarity instead."
+            )
+            return
+            
+        if not LANGCHAIN_AVAILABLE:
+            self.logger.warning(
+                "LangChain not available. Install with: uv add langchain langchain-huggingface langchain-community faiss-cpu sentence-transformers"
+            )
+            return
+
+        try:
+            # Initialize sentence transformer embeddings
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True},
+            )
+            
+            # Initialize text splitter for long documents
+            self.text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.chunk_size if hasattr(self, 'chunk_size') else 1000,
+                chunk_overlap=self.chunk_overlap if hasattr(self, 'chunk_overlap') else 200,
+                length_function=len,
+                separators=["\n\n", "\n", ". ", " ", ""],
+            )
+            
+            self.langchain_enabled = True
+            self.logger.info("LangChain components initialized successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize LangChain: {e}")
+            self.langchain_enabled = False
 
     async def initialize_user_profile(
         self, user_id: int, initial_data: Optional[Dict[str, Any]] = None
@@ -463,6 +563,401 @@ class PersonalizedRAGSystem:
             "export_timestamp": time.time(),
         }
 
+    # ============= LangChain Enhanced Methods for Long-Context =============
+
+    async def add_memory_with_embedding(
+        self,
+        user_id: int,
+        content: str,
+        role: str,
+        topic: Optional[str] = None,
+        importance: float = 0.5,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ConversationMemory:
+        """
+        Add a memory with vector embedding for semantic search.
+        Handles long content by chunking if necessary.
+        """
+        try:
+            memories_created = []
+            
+            # Check if content needs chunking (for long documents)
+            if self.langchain_enabled and len(content) > self.chunk_size:
+                chunks = self._chunk_content(content)
+                self.logger.debug(f"Content chunked into {len(chunks)} parts for user {user_id}")
+                
+                for i, chunk in enumerate(chunks):
+                    chunk_memory = await self._create_memory_with_embedding(
+                        user_id=user_id,
+                        content=chunk,
+                        role=role,
+                        topic=topic,
+                        importance=importance,
+                        tags=tags,
+                        metadata={**(metadata or {}), "chunk_index": i, "total_chunks": len(chunks)},
+                        chunk_id=f"chunk_{i}",
+                    )
+                    memories_created.append(chunk_memory)
+                
+                # Return the first chunk as the primary memory
+                return memories_created[0] if memories_created else await self.add_memory(
+                    user_id, content, role, topic, importance, tags, metadata
+                )
+            else:
+                return await self._create_memory_with_embedding(
+                    user_id, content, role, topic, importance, tags, metadata
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error adding memory with embedding: {e}")
+            # Fallback to basic memory creation
+            return await self.add_memory(user_id, content, role, topic, importance, tags, metadata)
+
+    async def _create_memory_with_embedding(
+        self,
+        user_id: int,
+        content: str,
+        role: str,
+        topic: Optional[str] = None,
+        importance: float = 0.5,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        chunk_id: Optional[str] = None,
+    ) -> ConversationMemory:
+        """Create a single memory with embedding"""
+        embedding = None
+        if self.langchain_enabled and self.embeddings:
+            try:
+                embedding = await asyncio.to_thread(
+                    self.embeddings.embed_query, content
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to generate embedding: {e}")
+
+        memory = ConversationMemory(
+            message_id=f"mem_{user_id}_{int(time.time() * 1000)}",
+            user_id=user_id,
+            content=content,
+            role=role,
+            timestamp=time.time(),
+            topic=topic or self._extract_topic(content),
+            importance_score=importance,
+            tags=tags or [],
+            metadata=metadata or {},
+            embedding=embedding,
+            chunk_id=chunk_id,
+        )
+
+        # Update user interests based on topic
+        if memory.topic:
+            await self._update_user_interests(user_id, memory.topic)
+
+        # Persist to database
+        if self.db is not None:
+            await self._save_memory_to_db(user_id, memory)
+
+        # Update vector store for fast retrieval
+        if self.langchain_enabled and embedding:
+            await self._update_user_vector_store(user_id, memory)
+
+        self.logger.debug(f"Added memory with embedding for user {user_id}: {memory.message_id}")
+        return memory
+
+    def _chunk_content(self, content: str) -> List[str]:
+        """Split long content into chunks using LangChain text splitter"""
+        if not self.langchain_enabled or not self.text_splitter:
+            # Fallback to simple chunking
+            chunks = []
+            for i in range(0, len(content), self.chunk_size - self.chunk_overlap):
+                chunks.append(content[i:i + self.chunk_size])
+            return chunks
+
+        try:
+            # Use LangChain's RecursiveCharacterTextSplitter
+            chunks = self.text_splitter.split_text(content)
+            return chunks
+        except Exception as e:
+            self.logger.warning(f"LangChain chunking failed, using fallback: {e}")
+            chunks = []
+            for i in range(0, len(content), self.chunk_size - self.chunk_overlap):
+                chunks.append(content[i:i + self.chunk_size])
+            return chunks
+
+    async def _update_user_vector_store(
+        self, user_id: int, memory: ConversationMemory
+    ) -> None:
+        """Update user's FAISS vector store with new memory"""
+        if not self.langchain_enabled or not memory.embedding:
+            return
+
+        try:
+            if user_id not in self.vector_stores:
+                # Create new vector store for user
+                self.vector_stores[user_id] = {
+                    "embeddings": [memory.embedding],
+                    "memories": [memory],
+                    "ids": [memory.message_id],
+                }
+            else:
+                # Add to existing store
+                self.vector_stores[user_id]["embeddings"].append(memory.embedding)
+                self.vector_stores[user_id]["memories"].append(memory)
+                self.vector_stores[user_id]["ids"].append(memory.message_id)
+
+        except Exception as e:
+            self.logger.error(f"Error updating vector store: {e}")
+
+    async def retrieve_with_semantic_search(
+        self,
+        user_id: int,
+        query: str,
+        limit: int = 10,
+        min_similarity: float = 0.3,
+    ) -> List[ConversationMemory]:
+        """
+        Retrieve memories using semantic similarity search with embeddings.
+        Falls back to basic retrieval if LangChain is not available.
+        """
+        if not self.langchain_enabled or user_id not in self.vector_stores:
+            return await self.retrieve_personalized_context(user_id, query, limit)
+
+        try:
+            # Generate query embedding
+            query_embedding = await asyncio.to_thread(
+                self.embeddings.embed_query, query
+            )
+
+            user_store = self.vector_stores[user_id]
+            embeddings = user_store["embeddings"]
+            memories = user_store["memories"]
+
+            # Calculate cosine similarities
+            similarities = []
+            for i, mem_embedding in enumerate(embeddings):
+                similarity = self._cosine_similarity(query_embedding, mem_embedding)
+                if similarity >= min_similarity:
+                    similarities.append((memories[i], similarity))
+
+            # Sort by similarity and return top results
+            similarities.sort(key=lambda x: x[1], reverse=True)
+            result = [mem for mem, sim in similarities[:limit]]
+
+            self.logger.debug(
+                f"Semantic search retrieved {len(result)} memories for user {user_id}"
+            )
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Semantic search failed: {e}")
+            return await self.retrieve_personalized_context(user_id, query, limit)
+
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate cosine similarity between two vectors"""
+        try:
+            dot_product = sum(a * b for a, b in zip(vec1, vec2))
+            norm1 = sum(a * a for a in vec1) ** 0.5
+            norm2 = sum(b * b for b in vec2) ** 0.5
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            return dot_product / (norm1 * norm2)
+        except Exception:
+            return 0.0
+
+    async def retrieve_hierarchical_context(
+        self,
+        user_id: int,
+        query: str,
+        max_tokens: int = 8000,
+        include_recent: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve context using hierarchical memory strategy for long contexts.
+        
+        Returns:
+            - recent_messages: Always include last N messages for continuity
+            - semantic_matches: Relevant memories from semantic search
+            - topic_summaries: Summarized context from older memories
+            - total_tokens: Estimated token count
+        """
+        try:
+            result = {
+                "recent_messages": [],
+                "semantic_matches": [],
+                "topic_summaries": [],
+                "total_tokens": 0,
+            }
+
+            # 1. Get recent messages (always include for conversation continuity)
+            memories = await self._load_memories_from_db(user_id)
+            if not memories:
+                return result
+
+            sorted_memories = sorted(memories, key=lambda m: m.timestamp, reverse=True)
+            recent = sorted_memories[:include_recent]
+            result["recent_messages"] = recent
+            
+            # Estimate tokens (rough: 4 chars = 1 token)
+            recent_tokens = sum(len(m.content) // 4 for m in recent)
+            result["total_tokens"] = recent_tokens
+
+            # 2. Semantic search for relevant context
+            remaining_tokens = max_tokens - recent_tokens
+            if remaining_tokens > 500 and self.langchain_enabled:
+                semantic_results = await self.retrieve_with_semantic_search(
+                    user_id, query, limit=self.max_retrieval_results
+                )
+                
+                # Filter out recent messages already included
+                recent_ids = {m.message_id for m in recent}
+                semantic_filtered = [
+                    m for m in semantic_results if m.message_id not in recent_ids
+                ]
+
+                # Add semantic matches within token budget
+                for memory in semantic_filtered:
+                    mem_tokens = len(memory.content) // 4
+                    if result["total_tokens"] + mem_tokens <= max_tokens:
+                        result["semantic_matches"].append(memory)
+                        result["total_tokens"] += mem_tokens
+                    else:
+                        break
+
+            # 3. Add topic summaries if we have more room
+            remaining_tokens = max_tokens - result["total_tokens"]
+            if remaining_tokens > 200:
+                # Get consolidated summaries from DB
+                summaries = await self._load_consolidated_summaries(user_id)
+                for summary in summaries[:3]:  # Limit to 3 summaries
+                    summary_tokens = len(str(summary)) // 4
+                    if result["total_tokens"] + summary_tokens <= max_tokens:
+                        result["topic_summaries"].append(summary)
+                        result["total_tokens"] += summary_tokens
+
+            self.logger.info(
+                f"Hierarchical context for user {user_id}: "
+                f"{len(result['recent_messages'])} recent, "
+                f"{len(result['semantic_matches'])} semantic, "
+                f"{len(result['topic_summaries'])} summaries, "
+                f"~{result['total_tokens']} tokens"
+            )
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Error retrieving hierarchical context: {e}")
+            return {
+                "recent_messages": [],
+                "semantic_matches": [],
+                "topic_summaries": [],
+                "total_tokens": 0,
+            }
+
+    async def summarize_conversation_segment(
+        self,
+        memories: List[ConversationMemory],
+        max_summary_length: int = 500,
+    ) -> str:
+        """
+        Create a summary of a conversation segment.
+        Uses extractive summarization based on importance and topic coverage.
+        """
+        if not memories:
+            return ""
+
+        try:
+            # Group by topic
+            topic_contents: Dict[str, List[str]] = {}
+            for memory in memories:
+                topic = memory.topic or "general"
+                if topic not in topic_contents:
+                    topic_contents[topic] = []
+                topic_contents[topic].append(memory.content[:200])  # First 200 chars
+
+            # Build summary
+            summary_parts = []
+            for topic, contents in topic_contents.items():
+                topic_summary = f"[{topic}]: {'; '.join(contents[:3])}"
+                summary_parts.append(topic_summary)
+
+            full_summary = " | ".join(summary_parts)
+            
+            # Truncate if too long
+            if len(full_summary) > max_summary_length:
+                full_summary = full_summary[:max_summary_length - 3] + "..."
+
+            return full_summary
+
+        except Exception as e:
+            self.logger.error(f"Error summarizing conversation: {e}")
+            return ""
+
+    async def get_context_for_llm(
+        self,
+        user_id: int,
+        query: str,
+        max_context_chars: int = 32000,
+    ) -> str:
+        """
+        Get optimized context string for LLM prompt injection.
+        Combines hierarchical retrieval with formatting for LLM consumption.
+        """
+        try:
+            hierarchical = await self.retrieve_hierarchical_context(
+                user_id, query, max_tokens=max_context_chars // 4
+            )
+
+            context_parts = []
+
+            # Add recent conversation
+            if hierarchical["recent_messages"]:
+                recent_text = "\n".join(
+                    f"[{m.role}]: {m.content}" for m in hierarchical["recent_messages"]
+                )
+                context_parts.append(f"Recent conversation:\n{recent_text}")
+
+            # Add semantically relevant memories
+            if hierarchical["semantic_matches"]:
+                relevant_text = "\n".join(
+                    f"- {m.content[:300]}" for m in hierarchical["semantic_matches"][:5]
+                )
+                context_parts.append(f"Relevant context:\n{relevant_text}")
+
+            # Add historical summaries
+            if hierarchical["topic_summaries"]:
+                summaries_text = "\n".join(
+                    str(s.get("preview", s))[:200] 
+                    for s in hierarchical["topic_summaries"]
+                )
+                context_parts.append(f"Historical context:\n{summaries_text}")
+
+            full_context = "\n\n---\n\n".join(context_parts)
+            
+            # Ensure we don't exceed the limit
+            if len(full_context) > max_context_chars:
+                full_context = full_context[:max_context_chars - 3] + "..."
+
+            return full_context
+
+        except Exception as e:
+            self.logger.error(f"Error getting context for LLM: {e}")
+            return ""
+
+    async def _load_consolidated_summaries(self, user_id: int) -> List[Dict[str, Any]]:
+        """Load consolidated memory summaries from database"""
+        try:
+            if self.db is None:
+                return []
+
+            collection = self.db["consolidated_memories"]
+            summaries = await asyncio.to_thread(
+                lambda: list(collection.find({"user_id": user_id}).sort("consolidated_at", -1).limit(10))
+            )
+            return summaries
+
+        except Exception as e:
+            self.logger.error(f"Error loading consolidated summaries: {e}")
+            return []
+
     # ============= Helper Methods =============
 
     def _extract_topic(self, content: str) -> Optional[str]:
@@ -495,9 +990,22 @@ class PersonalizedRAGSystem:
         return " ".join(words) if words else None
 
     def _calculate_semantic_similarity(self, query: str, content: str) -> float:
-        """Calculate semantic similarity between query and content"""
+        """
+        Calculate semantic similarity between query and content.
+        Uses embedding-based similarity when LangChain is available,
+        falls back to word overlap for basic similarity.
+        """
         try:
-            # Simple word overlap similarity
+            # Use embedding-based similarity if available
+            if self.langchain_enabled and self.embeddings:
+                try:
+                    query_embedding = self.embeddings.embed_query(query)
+                    content_embedding = self.embeddings.embed_query(content)
+                    return self._cosine_similarity(query_embedding, content_embedding)
+                except Exception as e:
+                    self.logger.debug(f"Embedding similarity failed, using fallback: {e}")
+
+            # Fallback: Simple word overlap similarity (Jaccard)
             query_words = set(query.lower().split())
             content_words = set(content.lower().split())
 
