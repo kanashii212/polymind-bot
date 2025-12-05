@@ -98,9 +98,6 @@ class PersonalizedRAGSystem:
         self.db = db
 
         # RAG Configuration
-        self.user_profiles: Dict[int, UserProfile] = {}
-        self.conversation_memories: Dict[int, List[ConversationMemory]] = {}
-        self.topic_cache: Dict[int, Dict[str, float]] = {}  # user_id -> topic scores
 
         # Memory decay configuration
         self.recent_threshold = 7 * 24 * 3600  # 7 days
@@ -127,7 +124,6 @@ class PersonalizedRAGSystem:
                 profile_data = await self._load_profile_from_db(user_id)
                 if profile_data:
                     profile = UserProfile.from_dict(profile_data)
-                    self.user_profiles[user_id] = profile
                     self.logger.info(f"Loaded existing profile for user {user_id}")
                     return profile
 
@@ -140,7 +136,6 @@ class PersonalizedRAGSystem:
                 )
                 profile.learning_style = initial_data.get("learning_style", "balanced")
 
-            self.user_profiles[user_id] = profile
             await self._save_profile_to_db(user_id, profile)
             self.logger.info(f"Created new profile for user {user_id}")
             return profile
@@ -153,8 +148,10 @@ class PersonalizedRAGSystem:
         self, user_id: int, updates: Dict[str, Any]
     ) -> UserProfile:
         """Update user profile with new information"""
-        profile = self.user_profiles.get(user_id)
-        if not profile:
+        profile_data = await self._load_profile_from_db(user_id)
+        if profile_data:
+            profile = UserProfile.from_dict(profile_data)
+        else:
             profile = await self.initialize_user_profile(user_id)
 
         # Update profile fields
@@ -176,7 +173,6 @@ class PersonalizedRAGSystem:
         profile.interaction_count += 1
         profile.last_updated = time.time()
 
-        self.user_profiles[user_id] = profile
         await self._save_profile_to_db(user_id, profile)
         return profile
 
@@ -192,9 +188,6 @@ class PersonalizedRAGSystem:
     ) -> ConversationMemory:
         """Add a memory to user's personalized memory store"""
         try:
-            if user_id not in self.conversation_memories:
-                self.conversation_memories[user_id] = []
-
             # Create memory object
             memory = ConversationMemory(
                 message_id=f"mem_{user_id}_{int(time.time() * 1000)}",
@@ -207,9 +200,6 @@ class PersonalizedRAGSystem:
                 tags=tags or [],
                 metadata=metadata or {},
             )
-
-            # Store in memory
-            self.conversation_memories[user_id].append(memory)
 
             # Update user interests based on topic
             if memory.topic:
@@ -241,11 +231,13 @@ class PersonalizedRAGSystem:
         Takes into account user's learning style and expertise level
         """
         try:
-            profile = self.user_profiles.get(user_id)
-            if not profile:
+            profile_data = await self._load_profile_from_db(user_id)
+            if profile_data:
+                profile = UserProfile.from_dict(profile_data)
+            else:
                 profile = await self.initialize_user_profile(user_id)
 
-            memories = self.conversation_memories.get(user_id, [])
+            memories = await self._load_memories_from_db(user_id)
             if not memories:
                 self.logger.debug(f"No memories found for user {user_id}")
                 return []
@@ -315,11 +307,12 @@ class PersonalizedRAGSystem:
         and interaction history
         """
         try:
-            profile = self.user_profiles.get(user_id)
-            if not profile:
+            profile_data = await self._load_profile_from_db(user_id)
+            if not profile_data:
                 return []
+            profile = UserProfile.from_dict(profile_data)
 
-            memories = self.conversation_memories.get(user_id, [])
+            memories = await self._load_memories_from_db(user_id)
             if not memories:
                 return []
 
@@ -373,7 +366,7 @@ class PersonalizedRAGSystem:
         Returns consolidated data and cleanup statistics
         """
         try:
-            memories = self.conversation_memories.get(user_id, [])
+            memories = await self._load_memories_from_db(user_id)
             if not memories:
                 return {"consolidated": 0, "archived": 0}
 
@@ -395,8 +388,6 @@ class PersonalizedRAGSystem:
                 if self.db is not None:
                     await self._save_consolidated_summary(user_id, summary)
 
-                # Update memory store
-                self.conversation_memories[user_id] = active_memories
                 self.logger.info(
                     f"Consolidated {len(old_memories)} memories for user {user_id}"
                 )
@@ -417,7 +408,7 @@ class PersonalizedRAGSystem:
         self, user_id: int, topic: str, limit: int = 10
     ) -> List[ConversationMemory]:
         """Search memories by specific topic"""
-        memories = self.conversation_memories.get(user_id, [])
+        memories = await self._load_memories_from_db(user_id)
         if not memories:
             return []
 
@@ -429,11 +420,13 @@ class PersonalizedRAGSystem:
         self, user_id: int
     ) -> Dict[str, Any]:
         """Export comprehensive learning profile for analysis"""
-        profile = self.user_profiles.get(user_id)
-        if not profile:
+        profile_data = await self._load_profile_from_db(user_id)
+        if profile_data:
+            profile = UserProfile.from_dict(profile_data)
+        else:
             profile = await self.initialize_user_profile(user_id)
 
-        memories = self.conversation_memories.get(user_id, [])
+        memories = await self._load_memories_from_db(user_id)
 
         # Calculate statistics
         total_interactions = len(memories)
@@ -600,13 +593,16 @@ class PersonalizedRAGSystem:
 
     async def _update_user_interests(self, user_id: int, topic: str) -> None:
         """Update user interests based on interaction"""
-        profile = self.user_profiles.get(user_id)
-        if not profile:
+        profile_data = await self._load_profile_from_db(user_id)
+        if not profile_data:
             return
 
+        profile = UserProfile.from_dict(profile_data)
         current_score = profile.interests.get(topic, 0.0)
         new_score = min(current_score + 0.1, 1.0)
         profile.interests[topic] = new_score
+        profile.last_updated = time.time()
+        await self._save_profile_to_db(user_id, profile)
 
     def _suggest_depth_level(
         self, topic: str, expertise_level: str
@@ -676,6 +672,24 @@ class PersonalizedRAGSystem:
         except Exception as e:
             self.logger.error(f"Error loading profile from DB: {e}")
             return None
+
+    async def _load_memories_from_db(self, user_id: int) -> List[ConversationMemory]:
+        """Load user memories from database"""
+        try:
+            if self.db is None:
+                return []
+
+            collection = self.db["personalized_memories"]
+            memories_data = await asyncio.to_thread(
+                collection.find, {"user_id": user_id}
+            )
+            memories_data = list(memories_data)  # Convert cursor to list
+            memories = [ConversationMemory(**data) for data in memories_data]
+            return memories
+
+        except Exception as e:
+            self.logger.error(f"Error loading memories from DB: {e}")
+            return []
 
     async def _save_profile_to_db(
         self, user_id: int, profile: UserProfile
