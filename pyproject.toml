@@ -41,7 +41,7 @@ dependencies = [
     "python-docx==1.1.2",
     "python-dotenv==1.0.1",
     "python-multipart==0.0.18",
-    "python-telegram-bot==22.1",
+    "python-telegram-bot==22.8",
     "regex==2024.11.6",
     "reportlab==4.3.1",
     "requests==2.31.0",
