@@ -329,9 +329,17 @@ def run_http_server():
 
 # ======================= ЗАПУСК =======================
 if __name__ == "__main__":
+    # Запускаем HTTP-сервер для Render
     http_thread = threading.Thread(target=run_http_server)
     http_thread.daemon = True
     http_thread.start()
     
+    # 🔧 ЗАЩИТА ОТ ДУБЛИРОВАНИЯ (исправляет ошибку 409)
+    try:
+        bot.remove_webhook()
+        print("✅ Webhook удалён")
+    except Exception as e:
+        print(f"⚠️ Webhook не удалён: {e}")
+    
     print("🤖 MAB Gateway Bot запущен!")
-    bot.infinity_polling()
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
