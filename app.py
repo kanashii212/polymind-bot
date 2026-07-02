@@ -7,8 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 from src.api.app_factory import create_application
 import uvicorn
 
-# 🔧 ИСПРАВЛЕНИЕ ОШИБКИ ЦИКЛА СОБЫТИЙ ДЛЯ WINDOWS И RENDER
-asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# 🔧 ИСПРАВЛЕНИЕ ДЛЯ РАЗНЫХ ОС: применяем политику только на Windows
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import gc
 
