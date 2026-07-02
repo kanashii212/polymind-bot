@@ -30,7 +30,7 @@ dependencies = [
     "orjson>=3.8.0",
     "pdfminer-six==20221105",
     "pillow==11.1.0",
-    "psutil==7.0.0",
+    "psutil==7.2.2",
     "pydantic==2.10.2",
     "pydub==0.25.1",
     "pydyf==0.11.0",
