@@ -1,11 +1,14 @@
 import sys
 import os
+import asyncio
 import logging
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 from src.api.app_factory import create_application
 import uvicorn
 
+# 🔧 ИСПРАВЛЕНИЕ ОШИБКИ ЦИКЛА СОБЫТИЙ ДЛЯ WINDOWS И RENDER
+asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import gc
 
