@@ -1,7 +1,6 @@
 import os
 import json
 import threading
-import time
 import telebot
 import requests
 from telebot.types import Message
@@ -9,6 +8,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import hashlib
 import secrets
 import tempfile
+import re
 
 # ======================= НАСТРОЙКИ =======================
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -104,11 +104,11 @@ def add_referral_bonus(user_id, friend_id):
         return True
     return False
 
-# ======================= ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (100% РАБОЧАЯ) =======================
-def generate_image(prompt: str) -> str:
-    """Генерирует изображение через OpenRouter"""
+# ======================= ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (С ВОЗВРАТОМ URL) =======================
+def generate_image_url(prompt: str) -> str:
+    """Генерирует изображение и возвращает URL картинки"""
     if not OPENROUTER_API_KEY:
-        return "❌ OPENROUTER_API_KEY не настроен. Добавьте его в переменные окружения Render."
+        return "❌ OPENROUTER_API_KEY не настроен."
     
     try:
         # Пробуем Gemini 2.5 Flash Image
@@ -123,7 +123,7 @@ def generate_image(prompt: str) -> str:
             json={
                 "model": "google/gemini-2.5-flash-image",
                 "messages": [
-                    {"role": "user", "content": f"Generate an image: {prompt}"}
+                    {"role": "user", "content": f"Generate an image: {prompt}. Return ONLY the image URL."}
                 ],
                 "modalities": ["image", "text"]
             },
@@ -153,14 +153,25 @@ def generate_image(prompt: str) -> str:
             data = response.json()
             if "choices" in data and len(data["choices"]) > 0:
                 content = data["choices"][0]["message"]["content"]
-                return f"🖼️ Изображение по запросу: '{prompt}'\n\n{content}"
+                
+                # Ищем ссылку на изображение
+                url_pattern = r'https?://[^\s<>"]+\.(?:jpg|jpeg|png|gif|webp|svg)'
+                urls = re.findall(url_pattern, content, re.IGNORECASE)
+                
+                # Если не нашли по расширению, ищем любую ссылку
+                if not urls:
+                    url_pattern = r'https?://[^\s<>"]+'
+                    urls = re.findall(url_pattern, content, re.IGNORECASE)
+                
+                if urls:
+                    return urls[0]  # Первая найденная ссылка
+                else:
+                    return f"❌ Ссылка не найдена. Ответ: {content[:200]}..."
             else:
                 return f"❌ Неожиданный ответ: {data}"
         else:
             return f"❌ Ошибка API: {response.status_code} - {response.text}"
             
-    except requests.exceptions.Timeout:
-        return "❌ Превышено время ожидания. Попробуйте позже."
     except Exception as e:
         return f"❌ Ошибка: {str(e)}"
 
@@ -251,15 +262,28 @@ def image_command(message: Message):
             f"💡 /referral - пригласите друга")
         return
     
-    status_msg = bot.reply_to(message, "🔄 Генерация... ⏳")
-    result = generate_image(prompt)
-    increment_usage(user_id, use_type)
+    status_msg = bot.reply_to(message, "🔄 Генерация изображения... ⏳")
     
-    bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=status_msg.message_id,
-        text=result
-    )
+    image_url = generate_image_url(prompt)
+    
+    if image_url.startswith('http'):
+        # Отправляем изображение по ссылке
+        bot.send_photo(
+            chat_id=message.chat.id,
+            photo=image_url,
+            caption=f"🖼️ По запросу: '{prompt}'"
+        )
+        # Удаляем сообщение с "Генерация..."
+        bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+    else:
+        # Если ошибка, обновляем сообщение с ошибкой
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            text=image_url
+        )
+    
+    increment_usage(user_id, use_type)
 
 @bot.message_handler(commands=['admin_stats'])
 def admin_stats(message: Message):
@@ -289,7 +313,7 @@ def handle_voice(message: Message):
         bot.reply_to(message, f"❌ Лимит исчерпан")
         return
     
-    status_msg = bot.reply_to(message, "🎤 Распознаю... ⏳")
+    status_msg = bot.reply_to(message, "🎤 Распознаю голосовое... ⏳")
     
     try:
         file_info = bot.get_file(message.voice.file_id)
@@ -298,6 +322,7 @@ def handle_voice(message: Message):
             tmp.write(downloaded_file)
             tmp_path = tmp.name
         
+        # Заглушка для распознавания
         result = "🎤 Голосовое распознано (функция в разработке)"
         increment_usage(user_id, use_type)
         
