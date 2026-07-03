@@ -108,7 +108,7 @@ def add_referral_bonus(user_id, friend_id):
 
 # ======================= ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (ИСПРАВЛЕННАЯ) =======================
 def generate_image(prompt: str) -> str:
-    """Генерирует изображение через OpenRouter с FLUX 1.1 Pro"""
+    """Генерирует изображение через OpenRouter с Gemini 2.5 Flash Image"""
     if not OPENROUTER_API_KEY:
         return "❌ OPENROUTER_API_KEY не настроен. Добавьте его в переменные окружения Render."
     
@@ -122,12 +122,13 @@ def generate_image(prompt: str) -> str:
                 "X-Title": "MAB Gateway Bot"
             },
             json={
-                "model": "black-forest-labs/flux-1.1-pro",  # 🔥 Бесплатная и стабильная модель
+                "model": "google/gemini-2.5-flash-image",  # 🔥 РАБОЧАЯ МОДЕЛЬ
                 "messages": [
                     {"role": "user", "content": f"Generate an image: {prompt}"}
-                ]
+                ],
+                "modalities": ["image", "text"]  # Явно указываем, что нужна картинка
             },
-            timeout=45
+            timeout=60
         )
         
         if response.status_code == 200:
