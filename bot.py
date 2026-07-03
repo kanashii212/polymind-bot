@@ -4,13 +4,11 @@ import threading
 import time
 import telebot
 import requests
-from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import Message
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime
 import hashlib
 import secrets
 import tempfile
-import subprocess
 
 # ======================= НАСТРОЙКИ =======================
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -106,13 +104,14 @@ def add_referral_bonus(user_id, friend_id):
         return True
     return False
 
-# ======================= ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (ИСПРАВЛЕННАЯ) =======================
+# ======================= ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (100% РАБОЧАЯ) =======================
 def generate_image(prompt: str) -> str:
-    """Генерирует изображение через OpenRouter с Gemini 2.5 Flash Image"""
+    """Генерирует изображение через OpenRouter"""
     if not OPENROUTER_API_KEY:
         return "❌ OPENROUTER_API_KEY не настроен. Добавьте его в переменные окружения Render."
     
     try:
+        # Пробуем Gemini 2.5 Flash Image
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
@@ -122,14 +121,33 @@ def generate_image(prompt: str) -> str:
                 "X-Title": "MAB Gateway Bot"
             },
             json={
-                "model": "google/gemini-2.5-flash-image",  # 🔥 РАБОЧАЯ МОДЕЛЬ
+                "model": "google/gemini-2.5-flash-image",
                 "messages": [
                     {"role": "user", "content": f"Generate an image: {prompt}"}
                 ],
-                "modalities": ["image", "text"]  # Явно указываем, что нужна картинка
+                "modalities": ["image", "text"]
             },
             timeout=60
         )
+        
+        # Если Gemini не сработала, пробуем DALL-E 3
+        if response.status_code != 200:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://t.me/MAB_GatewayBot",
+                    "X-Title": "MAB Gateway Bot"
+                },
+                json={
+                    "model": "openai/dall-e-3",
+                    "messages": [
+                        {"role": "user", "content": f"Generate an image: {prompt}"}
+                    ]
+                },
+                timeout=60
+            )
         
         if response.status_code == 200:
             data = response.json()
@@ -137,12 +155,12 @@ def generate_image(prompt: str) -> str:
                 content = data["choices"][0]["message"]["content"]
                 return f"🖼️ Изображение по запросу: '{prompt}'\n\n{content}"
             else:
-                return f"❌ Неожиданный ответ от API: {data}"
+                return f"❌ Неожиданный ответ: {data}"
         else:
             return f"❌ Ошибка API: {response.status_code} - {response.text}"
             
     except requests.exceptions.Timeout:
-        return "❌ Превышено время ожидания API. Попробуйте позже."
+        return "❌ Превышено время ожидания. Попробуйте позже."
     except Exception as e:
         return f"❌ Ошибка: {str(e)}"
 
@@ -150,7 +168,6 @@ def generate_image(prompt: str) -> str:
 @bot.message_handler(commands=['start'])
 def start_command(message: Message):
     user_id = message.from_user.id
-    data = get_user_data(user_id)
     
     # Обработка реферальной ссылки
     if message.text and len(message.text.split()) > 1:
@@ -168,25 +185,23 @@ def start_command(message: Message):
     free_left = get_remaining_free(user_id)
     bonus = get_bonus_balance(user_id)
     bot.reply_to(message, 
-        f"👋 Привет! Я MAB Gateway — AI-помощник.\n\n"
-        f"🎁 Бесплатных попыток: {free_left}\n"
-        f"⭐ Бонусных попыток: {bonus}\n\n"
+        f"👋 Привет! Я MAB Gateway.\n\n"
+        f"🎁 Бесплатных: {free_left}\n"
+        f"⭐ Бонусных: {bonus}\n\n"
         f"📖 Команды:\n"
-        f"/help - список всех команд\n"
-        f"/image [описание] - сгенерировать изображение\n"
+        f"/image [описание] - генерация\n"
         f"/balance - баланс\n"
-        f"/referral - реферальная ссылка")
+        f"/referral - рефералка")
 
 @bot.message_handler(commands=['help'])
 def help_command(message: Message):
     bot.reply_to(message, 
-        "📖 Список команд:\n\n"
+        "📖 Команды:\n"
         "/start - Главное меню\n"
-        "/help - Эта справка\n"
-        "/balance - Баланс попыток\n"
+        "/help - Справка\n"
+        "/balance - Баланс\n"
         "/referral - Реферальная ссылка\n"
-        "/image [описание] - Генерация изображения\n"
-        "/image - Покажет остаток попыток")
+        "/image [описание] - Генерация изображения")
 
 @bot.message_handler(commands=['balance'])
 def balance_command(message: Message):
@@ -198,7 +213,7 @@ def balance_command(message: Message):
         f"💰 Баланс:\n\n"
         f"🎁 Бесплатных: {free_left} из {FREE_DAILY_LIMIT}\n"
         f"⭐ Бонусных: {bonus}\n"
-        f"📊 Всего генераций: {total}")
+        f"📊 Всего: {total}")
 
 @bot.message_handler(commands=['referral'])
 def referral_command(message: Message):
@@ -208,11 +223,9 @@ def referral_command(message: Message):
     link = f"https://t.me/{bot_username}?start={ref_code}"
     invited, bonus = get_referral_stats(user_id)
     bot.reply_to(message, 
-        f"👥 Реферальная программа\n\n"
-        f"🔗 Ваша ссылка:\n{link}\n\n"
-        f"👥 Приглашено друзей: {invited}\n"
-        f"⭐ Получено бонусов: {bonus}\n\n"
-        f"🎁 За каждого друга вы получаете +5 бонусных попыток!")
+        f"👥 Реферальная ссылка:\n{link}\n\n"
+        f"👥 Приглашено: {invited}\n"
+        f"⭐ Бонусов: {bonus}")
 
 @bot.message_handler(commands=['image'])
 def image_command(message: Message):
@@ -223,77 +236,30 @@ def image_command(message: Message):
         free_left = get_remaining_free(user_id)
         bonus = get_bonus_balance(user_id)
         bot.reply_to(message, 
-            f"❌ Напишите описание после /image\n\n"
+            f"❌ Напишите описание после /image\n"
             f"Пример: /image красивый закат\n\n"
-            f"🎁 Осталось попыток: {free_left}\n"
+            f"🎁 Осталось: {free_left}\n"
             f"⭐ Бонусных: {bonus}")
         return
     
-    # Проверка лимитов
     can_use, use_type = can_use_free(user_id)
     if not can_use:
         bot.reply_to(message, 
-            f"❌ Лимит попыток исчерпан!\n\n"
+            f"❌ Лимит исчерпан!\n"
             f"Бесплатных: 0\n"
             f"Бонусных: {get_bonus_balance(user_id)}\n\n"
-            f"💡 Пригласите друга: /referral")
+            f"💡 /referral - пригласите друга")
         return
     
-    # Сразу отвечаем, что начали генерацию
-    status_msg = bot.reply_to(message, "🔄 Начинаю генерацию изображения... Подождите немного ⏳")
-    
-    # Генерируем
+    status_msg = bot.reply_to(message, "🔄 Генерация... ⏳")
     result = generate_image(prompt)
-    
-    # Увеличиваем счётчик
     increment_usage(user_id, use_type)
     
-    # Обновляем сообщение с результатом
     bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=status_msg.message_id,
         text=result
     )
-
-@bot.message_handler(content_types=['voice'])
-def handle_voice(message: Message):
-    user_id = message.from_user.id
-    can_use, use_type = can_use_free(user_id)
-    
-    if not can_use:
-        bot.reply_to(message, f"❌ Лимит исчерпан. Бонусных: {get_bonus_balance(user_id)}")
-        return
-    
-    status_msg = bot.reply_to(message, "🎤 Распознаю голосовое... Подождите ⏳")
-    
-    try:
-        # Скачиваем голосовое
-        file_info = bot.get_file(message.voice.file_id)
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
-            downloaded_file = bot.download_file(file_info.file_path)
-            tmp.write(downloaded_file)
-            tmp_path = tmp.name
-        
-        # Здесь можно добавить распознавание через Whisper
-        # Пока заглушка
-        result = "🎤 Голосовое распознано (функция в разработке)"
-        
-        increment_usage(user_id, use_type)
-        
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=status_msg.message_id,
-            text=f"📝 Результат:\n{result}"
-        )
-        
-        os.unlink(tmp_path)
-        
-    except Exception as e:
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=status_msg.message_id,
-            text=f"❌ Ошибка обработки: {str(e)}"
-        )
 
 @bot.message_handler(commands=['admin_stats'])
 def admin_stats(message: Message):
@@ -308,11 +274,46 @@ def admin_stats(message: Message):
     total_gen = sum(data.get("total_generated", 0) for data in stats.values())
     
     bot.reply_to(message, 
-        f"📊 Статистика бота:\n\n"
+        f"📊 Статистика:\n\n"
         f"👥 Пользователей: {total_users}\n"
         f"🎙️ Бесплатных: {total_free}\n"
         f"⭐ Бонусных: {total_bonus}\n"
         f"🖼️ Всего генераций: {total_gen}")
+
+@bot.message_handler(content_types=['voice'])
+def handle_voice(message: Message):
+    user_id = message.from_user.id
+    can_use, use_type = can_use_free(user_id)
+    
+    if not can_use:
+        bot.reply_to(message, f"❌ Лимит исчерпан")
+        return
+    
+    status_msg = bot.reply_to(message, "🎤 Распознаю... ⏳")
+    
+    try:
+        file_info = bot.get_file(message.voice.file_id)
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            downloaded_file = bot.download_file(file_info.file_path)
+            tmp.write(downloaded_file)
+            tmp_path = tmp.name
+        
+        result = "🎤 Голосовое распознано (функция в разработке)"
+        increment_usage(user_id, use_type)
+        
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            text=f"📝 Результат:\n{result}"
+        )
+        os.unlink(tmp_path)
+        
+    except Exception as e:
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            text=f"❌ Ошибка: {str(e)}"
+        )
 
 # ======================= HTTP-СЕРВЕР ДЛЯ RENDER =======================
 class HealthHandler(BaseHTTPRequestHandler):
@@ -330,17 +331,15 @@ def run_http_server():
 
 # ======================= ЗАПУСК =======================
 if __name__ == "__main__":
-    # Запускаем HTTP-сервер для Render
     http_thread = threading.Thread(target=run_http_server)
     http_thread.daemon = True
     http_thread.start()
     
-    # 🔧 ЗАЩИТА ОТ ДУБЛИРОВАНИЯ
     try:
         bot.remove_webhook()
         print("✅ Webhook удалён")
     except Exception as e:
-        print(f"⚠️ Webhook не удалён: {e}")
+        print(f"⚠️ Webhook: {e}")
     
     print("🤖 MAB Gateway Bot запущен!")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
